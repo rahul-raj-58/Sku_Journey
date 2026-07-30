@@ -89,6 +89,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 .tile-tobepushed{--accent:var(--purple)} .tile-tobepushed .t-num{color:var(--purple)} .tile-tobepushed .t-pct{background:var(--purple-light);color:var(--purple);}
 .tile-notdel{--accent:var(--red)} .tile-notdel .t-num{color:var(--red)} .tile-notdel .t-pct{background:var(--red-light);color:var(--red);}
 
+/* ── ENTERPRISE COUNT CHIP ── */
+.seg-ent{font-size:11px;color:var(--muted);padding:3px 10px;background:var(--bg);border:1px solid var(--border);border-radius:12px;white-space:nowrap;}
+.seg-ent strong{color:var(--dark);font-weight:800;}
+
+/* ── TIMING ROW ── */
+.timings{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 2rem;padding:.65rem 1.25rem;background:#fafbfd;border-top:1px solid var(--border);font-size:12px;}
+.t-step{display:inline-flex;align-items:baseline;gap:.35rem;}
+.t-step-name{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);}
+.t-step-sep{color:#cbd5e1;font-weight:300;font-size:16px;line-height:1;}
+.t-step-vals{color:var(--muted);}
+.t-step-vals strong{color:var(--dark);font-weight:700;}
+.t-step-vals .p95{color:var(--amber);}
+
 /* ── STATUS DISTRIBUTION ── */
 .dist-card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:20px;}
 .dist-hdr{padding:18px 24px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;}
@@ -153,6 +166,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       <span class="seg-title">v1 — QC enabled</span>
       <span class="seg-flow">ai_sku_created_on → done_time → qc_done_time</span>
       <span class="seg-total">Total: <strong id="seg-v1q1-total">—</strong></span>
+      <span class="seg-ent">Enterprises: <strong id="ent-v1q1">—</strong></span>
       <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
     </div>
     <div class="states">
@@ -172,6 +186,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
         <div class="t-pct" id="pct-v1q1-tech-pending">—</div>
       </div>
     </div>
+    <div class="timings">
+      <span class="t-step"><span class="t-step-name">⏱ Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v1q1-tech-avg">—</strong> · P95 <strong class="p95" id="t-v1q1-tech-p95">—</strong></span></span>
+      <span class="t-step-sep">→</span>
+      <span class="t-step"><span class="t-step-name">QC Review</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v1q1-qc-avg">—</strong> · P95 <strong class="p95" id="t-v1q1-qc-p95">—</strong></span></span>
+    </div>
   </div>
 
   <!-- SEG 2: v1 QC Off -->
@@ -181,6 +200,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       <span class="seg-title">v1 — QC disabled</span>
       <span class="seg-flow">ai_sku_created_on → done_time</span>
       <span class="seg-total">Total: <strong id="seg-v1q0-total">—</strong></span>
+      <span class="seg-ent">Enterprises: <strong id="ent-v1q0">—</strong></span>
       <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
     </div>
     <div class="states">
@@ -195,6 +215,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
         <div class="t-pct" id="pct-v1q0-tech-pending">—</div>
       </div>
     </div>
+    <div class="timings">
+      <span class="t-step"><span class="t-step-name">⏱ Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v1q0-tech-avg">—</strong> · P95 <strong class="p95" id="t-v1q0-tech-p95">—</strong></span></span>
+    </div>
   </div>
 
   <!-- SEG 3: v2 QC Off -->
@@ -204,6 +227,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       <span class="seg-title">v2 — QC disabled</span>
       <span class="seg-flow">processedAt → ai_sku_created_on → done_time</span>
       <span class="seg-total">Total: <strong id="seg-v2q0-total">—</strong></span>
+      <span class="seg-ent">Enterprises: <strong id="ent-v2q0">—</strong></span>
       <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
     </div>
     <div class="states">
@@ -218,6 +242,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
         <div class="t-pct" id="pct-v2q0-tech-pending">—</div>
       </div>
     </div>
+    <div class="timings">
+      <span class="t-step"><span class="t-step-name">⏱ Pre-processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2q0-pre-avg">—</strong> · P95 <strong class="p95" id="t-v2q0-pre-p95">—</strong></span></span>
+      <span class="t-step-sep">→</span>
+      <span class="t-step"><span class="t-step-name">Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2q0-tech-avg">—</strong> · P95 <strong class="p95" id="t-v2q0-tech-p95">—</strong></span></span>
+    </div>
   </div>
 
   <!-- SEG 4: v2 QC On + Publishing -->
@@ -227,6 +256,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       <span class="seg-title">v2 — QC + Publishing enabled</span>
       <span class="seg-flow">processedAt → ai_sku_created_on → done_time → qc_done_time → firstPushedAt</span>
       <span class="seg-total">Total: <strong id="seg-v2pub1-total">—</strong></span>
+      <span class="seg-ent">Enterprises: <strong id="ent-v2pub1">—</strong></span>
       <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
     </div>
     <div class="states">
@@ -256,6 +286,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
         <div class="t-pct" id="pct-v2pub1-tech-pending">—</div>
       </div>
     </div>
+    <div class="timings">
+      <span class="t-step"><span class="t-step-name">⏱ Pre-processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub1-pre-avg">—</strong> · P95 <strong class="p95" id="t-v2pub1-pre-p95">—</strong></span></span>
+      <span class="t-step-sep">→</span>
+      <span class="t-step"><span class="t-step-name">Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub1-tech-avg">—</strong> · P95 <strong class="p95" id="t-v2pub1-tech-p95">—</strong></span></span>
+      <span class="t-step-sep">→</span>
+      <span class="t-step"><span class="t-step-name">QC Review</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub1-qc-avg">—</strong> · P95 <strong class="p95" id="t-v2pub1-qc-p95">—</strong></span></span>
+      <span class="t-step-sep">→</span>
+      <span class="t-step"><span class="t-step-name">Publishing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub1-push-avg">—</strong> · P95 <strong class="p95" id="t-v2pub1-push-p95">—</strong></span></span>
+    </div>
   </div>
 
   <!-- SEG 5: v2 QC On, No Publishing -->
@@ -265,6 +304,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
       <span class="seg-title">v2 — QC enabled, Publishing disabled</span>
       <span class="seg-flow">processedAt → ai_sku_created_on → done_time → qc_done_time</span>
       <span class="seg-total">Total: <strong id="seg-v2pub0-total">—</strong></span>
+      <span class="seg-ent">Enterprises: <strong id="ent-v2pub0">—</strong></span>
       <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
     </div>
     <div class="states">
@@ -283,6 +323,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
         <div class="t-num" id="cnt-v2pub0-tech-pending">—</div>
         <div class="t-pct" id="pct-v2pub0-tech-pending">—</div>
       </div>
+    </div>
+    <div class="timings">
+      <span class="t-step"><span class="t-step-name">⏱ Pre-processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub0-pre-avg">—</strong> · P95 <strong class="p95" id="t-v2pub0-pre-p95">—</strong></span></span>
+      <span class="t-step-sep">→</span>
+      <span class="t-step"><span class="t-step-name">Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub0-tech-avg">—</strong> · P95 <strong class="p95" id="t-v2pub0-tech-p95">—</strong></span></span>
+      <span class="t-step-sep">→</span>
+      <span class="t-step"><span class="t-step-name">QC Review</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub0-qc-avg">—</strong> · P95 <strong class="p95" id="t-v2pub0-qc-p95">—</strong></span></span>
     </div>
   </div>
 
@@ -406,6 +453,57 @@ function populate(d) {
   set('pct-v2pub0-delivered',     pct(d.v2_pub0_delivered,     v2p0));
   set('pct-v2pub0-not-delivered', pct(d.v2_pub0_not_delivered,  v2p0));
   set('pct-v2pub0-tech-pending',  pct(d.v2_pub0_tech_pending,   v2p0));
+
+  // ── Enterprise counts ──
+  const entFmt = v => (v != null ? n(v) : '—');
+  set('ent-v1q1',   entFmt(d.v1_qc1_ent_count));
+  set('ent-v1q0',   entFmt(d.v1_qc0_ent_count));
+  set('ent-v2q0',   entFmt(d.v2_qc0_ent_count));
+  set('ent-v2pub1', entFmt(d.v2_pub1_ent_count));
+  set('ent-v2pub0', entFmt(d.v2_pub0_ent_count));
+
+  // ── Timing (avg / P95 in minutes → human-readable) ──
+  const fd = fmtDuration;
+  // Seg 1
+  set('t-v1q1-tech-avg',   fd(d.v1_qc1_tech_avg_min));
+  set('t-v1q1-tech-p95',   fd(d.v1_qc1_tech_p95_min));
+  set('t-v1q1-qc-avg',     fd(d.v1_qc1_qc_avg_min));
+  set('t-v1q1-qc-p95',     fd(d.v1_qc1_qc_p95_min));
+  // Seg 2
+  set('t-v1q0-tech-avg',   fd(d.v1_qc0_tech_avg_min));
+  set('t-v1q0-tech-p95',   fd(d.v1_qc0_tech_p95_min));
+  // Seg 3
+  set('t-v2q0-pre-avg',    fd(d.v2_qc0_pre_avg_min));
+  set('t-v2q0-pre-p95',    fd(d.v2_qc0_pre_p95_min));
+  set('t-v2q0-tech-avg',   fd(d.v2_qc0_tech_avg_min));
+  set('t-v2q0-tech-p95',   fd(d.v2_qc0_tech_p95_min));
+  // Seg 4
+  set('t-v2pub1-pre-avg',  fd(d.v2_pub1_pre_avg_min));
+  set('t-v2pub1-pre-p95',  fd(d.v2_pub1_pre_p95_min));
+  set('t-v2pub1-tech-avg', fd(d.v2_pub1_tech_avg_min));
+  set('t-v2pub1-tech-p95', fd(d.v2_pub1_tech_p95_min));
+  set('t-v2pub1-qc-avg',   fd(d.v2_pub1_qc_avg_min));
+  set('t-v2pub1-qc-p95',   fd(d.v2_pub1_qc_p95_min));
+  set('t-v2pub1-push-avg', fd(d.v2_pub1_push_avg_min));
+  set('t-v2pub1-push-p95', fd(d.v2_pub1_push_p95_min));
+  // Seg 5
+  set('t-v2pub0-pre-avg',  fd(d.v2_pub0_pre_avg_min));
+  set('t-v2pub0-pre-p95',  fd(d.v2_pub0_pre_p95_min));
+  set('t-v2pub0-tech-avg', fd(d.v2_pub0_tech_avg_min));
+  set('t-v2pub0-tech-p95', fd(d.v2_pub0_tech_p95_min));
+  set('t-v2pub0-qc-avg',   fd(d.v2_pub0_qc_avg_min));
+  set('t-v2pub0-qc-p95',   fd(d.v2_pub0_qc_p95_min));
+}
+
+// ── DURATION FORMATTER ────────────────────────────────────────────────────────
+function fmtDuration(mins) {
+  if (mins == null) return '—';
+  const m = Math.round(mins);
+  if (m < 60)   return `${m}m`;
+  const h = Math.floor(m / 60), rm = m % 60;
+  if (m < 1440) return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+  const d = Math.floor(m / 1440), rh = Math.floor((m % 1440) / 60);
+  return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
 }
 
 // ── "LAST UPDATED" BADGE ──────────────────────────────────────────────────────
