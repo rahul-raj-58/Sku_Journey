@@ -105,7 +105,18 @@ function mbCount(where, retries = 3) {
 // ── MAIN ─────────────────────────────────────────────────────────────────────
 (async () => {
   console.log(`[${new Date().toISOString()}] Fetching ${QUERIES.length} metrics from Metabase…`);
+
+  // Load existing counts so we can preserve values on query failure
+  let existing = {};
+  try {
+    existing = JSON.parse(fs.readFileSync(OUT_FILE, 'utf8'));
+    console.log('Loaded existing counts.json — will preserve values on failure.');
+  } catch {
+    console.log('No existing counts.json — starting fresh.');
+  }
+
   const counts = { updated_at: new Date().toISOString() };
+  let failures = 0;
 
   for (const [metric, where] of QUERIES) {
     process.stdout.write(`  ${metric}… `);
@@ -114,14 +125,21 @@ function mbCount(where, retries = 3) {
       counts[metric] = val;
       console.log(val.toLocaleString());
     } catch (err) {
-      console.error(`FAILED: ${err.message}`);
-      counts[metric] = null;   // null in JSON signals "query failed" to the dashboard
+      failures++;
+      // Keep the last known good value instead of writing null
+      counts[metric] = existing[metric] ?? null;
+      console.error(`FAILED (kept previous: ${counts[metric]}) — ${err.message.slice(0, 120)}`);
     }
-    // Small pause between queries to avoid overwhelming ClickHouse
     await sleep(2_000);
   }
 
-  console.log('\nFinal counts:', counts);
+  // Only update updated_at if at least some queries succeeded
+  if (failures === QUERIES.length) {
+    counts.updated_at = existing.updated_at ?? counts.updated_at;
+    console.warn('All queries failed — preserving previous updated_at timestamp.');
+  }
+
+  console.log(`\nDone. ${QUERIES.length - failures}/${QUERIES.length} succeeded.`);
   fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
   fs.writeFileSync(OUT_FILE, JSON.stringify(counts, null, 2));
   console.log(`Written → ${OUT_FILE}`);
