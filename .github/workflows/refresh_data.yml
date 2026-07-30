@@ -6,7 +6,7 @@ on:
     paths-ignore:
       - 'data/counts.json'    # don't re-trigger when Actions itself commits the file
   schedule:
-    - cron: '0 * * * *'      # also runs every hour automatically
+    - cron: '*/5 * * * *'    # runs every 5 minutes — near real-time data
   workflow_dispatch:          # manual "Run workflow" button in GitHub Actions UI
 
 jobs:
