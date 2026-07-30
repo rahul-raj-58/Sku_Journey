@@ -2,11 +2,11 @@
 /**
  * fetch_counts.js — Metabase → data/counts.json
  * ================================================
- * Run by GitHub Actions every hour (see .github/workflows/refresh-data.yml).
- * Writes ./data/counts.json which the dashboard HTML reads.
+ * ONE GROUP BY query fetches all counts + enterprise counts + timing in a single
+ * table scan. ~5 rows returned, parsed in JS and mapped to counts.json keys.
  *
- * Local test:
- *   MB_API_KEY=mb_... node fetch_counts.js
+ * Run by GitHub Actions every hour (and on-demand via workflow_dispatch).
+ * Local test:  MB_API_KEY=mb_... node fetch_counts.js
  */
 
 'use strict';
@@ -14,98 +14,87 @@ const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 
-// ── CONFIG ────────────────────────────────────────────────────────────────────
 const MB_HOST   = 'metabase.spyne.ai';
 const API_KEY   = process.env.MB_API_KEY;
-const BASE_CARD = 12816;  // _SKU Journey Base v2 (is_360=0, all statuses)
+const BASE_CARD = 12816;
 const OUT_FILE  = path.join(__dirname, 'data', 'counts.json');
-// ─────────────────────────────────────────────────────────────────────────────
 
 if (!API_KEY) {
   console.error('ERROR: MB_API_KEY environment variable is not set.');
   process.exit(1);
 }
 
-// ── COUNT QUERIES ─────────────────────────────────────────────────────────────
-// Pattern: SELECT count() FROM {{#12816}} AS b WHERE <where>
-const COUNT_QUERIES = [
-  ['v1_qc1_delivered',      `version='v1' AND is_qc_on=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
-  ['v1_qc1_qc_pending',     `version='v1' AND is_qc_on=1 AND done_time IS NOT NULL AND qc_done_time IS NULL`],
-  ['v1_qc1_tech_pending',   `version='v1' AND is_qc_on=1 AND done_time IS NULL`],
-  ['v1_qc0_delivered',      `version='v1' AND is_qc_on=0 AND done_time IS NOT NULL`],
-  ['v1_qc0_tech_pending',   `version='v1' AND is_qc_on=0 AND done_time IS NULL`],
-  ['v2_qc0_delivered',      `version='v2' AND is_qc_on=0 AND done_time IS NOT NULL`],
-  ['v2_qc0_tech_pending',   `version='v2' AND is_qc_on=0 AND done_time IS NULL`],
-  ['v2_pub1_delivered',     `version='v2' AND is_qc_on=1 AND is_publishing=1 AND firstPushedAt IS NOT NULL`],
-  ['v2_pub1_pub_pending',   `version='v2' AND is_qc_on=1 AND is_publishing=1 AND firstPushedAt IS NULL AND qc_done_time IS NOT NULL AND (now() - toDateTime(qc_done_time)) > 14400`],
-  ['v2_pub1_to_push',       `version='v2' AND is_qc_on=1 AND is_publishing=1 AND firstPushedAt IS NULL AND qc_done_time IS NOT NULL AND (now() - toDateTime(qc_done_time)) <= 14400`],
-  ['v2_pub1_qc_pending',    `version='v2' AND is_qc_on=1 AND is_publishing=1 AND qc_done_time IS NULL AND done_time IS NOT NULL`],
-  ['v2_pub1_tech_pending',  `version='v2' AND is_qc_on=1 AND is_publishing=1 AND done_time IS NULL`],
-  ['v2_pub0_delivered',     `version='v2' AND is_qc_on=1 AND is_publishing=0 AND qc_done_time IS NOT NULL`],
-  ['v2_pub0_not_delivered', `version='v2' AND is_qc_on=1 AND is_publishing=0 AND qc_done_time IS NULL AND done_time IS NOT NULL`],
-  ['v2_pub0_tech_pending',  `version='v2' AND is_qc_on=1 AND is_publishing=0 AND done_time IS NULL`],
-];
+// ── Single query — one scan, all segments, all metrics ────────────────────────
+// Returns ~5 rows (one per segment): v1/qc1, v1/qc0, v2/qc0, v2/pub1, v2/pub0
+const SQL = `
+SELECT
+  version,
+  is_qc_on,
+  is_publishing,
 
-// ── SCALAR QUERIES ────────────────────────────────────────────────────────────
-// Pattern: full SQL returning a single scalar value.
-// Each query runs individually (no UNION ALL — avoids ClickHouse memory limits).
-const C = `{{#${BASE_CARD}}} AS b`;  // shorthand alias
+  -- Enterprise count
+  uniq(enterprise_name)                                    AS ent_count,
 
-const SCALAR_QUERIES = [
-  // ── Enterprise counts (uniq per segment) ──
-  ['v1_qc1_ent_count',     `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v1' AND is_qc_on=1`],
-  ['v1_qc0_ent_count',     `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v1' AND is_qc_on=0`],
-  ['v2_qc0_ent_count',     `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v2' AND is_qc_on=0`],
-  ['v2_pub1_ent_count',    `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1`],
-  ['v2_pub0_ent_count',    `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0`],
+  -- State counts
+  countIf(done_time IS NULL)                               AS tech_pending,
+  countIf(done_time IS NOT NULL AND qc_done_time IS NULL)  AS done_no_qc,
+  countIf(done_time IS NOT NULL AND qc_done_time IS NOT NULL AND (firstPushedAt IS NULL OR firstPushedAt = '')) AS done_qc_no_push,
+  countIf(firstPushedAt IS NOT NULL AND firstPushedAt != '')                                                   AS pushed,
+  countIf(firstPushedAt IS NULL AND qc_done_time IS NOT NULL
+    AND dateDiff('second', toDateTime(qc_done_time), now()) > 14400)                                           AS waiting_push_long,
+  countIf(firstPushedAt IS NULL AND qc_done_time IS NOT NULL
+    AND dateDiff('second', toDateTime(qc_done_time), now()) <= 14400)                                          AS waiting_push_short,
 
-  // ── v1 · QC On — tech processing (ai_sku_created_on → done_time) ──
-  ['v1_qc1_tech_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=1 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
-  ['v1_qc1_tech_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=1 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
-  // ── v1 · QC On — QC review (done_time → qc_done_time) ──
-  ['v1_qc1_qc_avg_min',    `SELECT round(avg(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
-  ['v1_qc1_qc_p95_min',    `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
+  -- Tech processing: ai_sku_created_on → done_time
+  round(avgIf(
+    dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)),
+    ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL
+  ))                                                       AS tech_avg_min,
+  round(quantileIf(0.95)(
+    dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)),
+    ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL
+  ))                                                       AS tech_p95_min,
 
-  // ── v1 · QC Off — tech processing (ai_sku_created_on → done_time) ──
-  ['v1_qc0_tech_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
-  ['v1_qc0_tech_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  -- QC review: done_time → qc_done_time
+  round(avgIf(
+    dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)),
+    done_time IS NOT NULL AND qc_done_time IS NOT NULL
+  ))                                                       AS qc_avg_min,
+  round(quantileIf(0.95)(
+    dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)),
+    done_time IS NOT NULL AND qc_done_time IS NOT NULL
+  ))                                                       AS qc_p95_min,
 
-  // ── v2 · QC Off — pre-processing (processedAt → ai_sku_created_on) ──
-  ['v2_qc0_pre_avg_min',   `SELECT round(avg(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=0 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
-  ['v2_qc0_pre_p95_min',   `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=0 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
-  // ── v2 · QC Off — tech processing (ai_sku_created_on → done_time) ──
-  ['v2_qc0_tech_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
-  ['v2_qc0_tech_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  -- Pre-processing: processedAt → ai_sku_created_on (v2 only)
+  round(avgIf(
+    dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)),
+    processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL
+  ))                                                       AS pre_avg_min,
+  round(quantileIf(0.95)(
+    dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)),
+    processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL
+  ))                                                       AS pre_p95_min,
 
-  // ── v2 · QC On · Publishing — pre-processing ──
-  ['v2_pub1_pre_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
-  ['v2_pub1_pre_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
-  // ── v2 · QC On · Publishing — tech processing ──
-  ['v2_pub1_tech_avg_min', `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
-  ['v2_pub1_tech_p95_min', `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
-  // ── v2 · QC On · Publishing — QC review ──
-  ['v2_pub1_qc_avg_min',   `SELECT round(avg(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
-  ['v2_pub1_qc_p95_min',   `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
-  // ── v2 · QC On · Publishing — publishing (qc_done_time → firstPushedAt) ──
-  ['v2_pub1_push_avg_min', `SELECT round(avg(dateDiff('minute', toDateTime(qc_done_time), toDateTime(firstPushedAt)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND qc_done_time IS NOT NULL AND firstPushedAt IS NOT NULL`],
-  ['v2_pub1_push_p95_min', `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(qc_done_time), toDateTime(firstPushedAt)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND qc_done_time IS NOT NULL AND firstPushedAt IS NOT NULL`],
+  -- Publishing: qc_done_time → firstPushedAt (v2 pub only)
+  round(avgIf(
+    dateDiff('minute', toDateTime(qc_done_time), toDateTime(firstPushedAt)),
+    qc_done_time IS NOT NULL AND firstPushedAt IS NOT NULL AND firstPushedAt != ''
+  ))                                                       AS push_avg_min,
+  round(quantileIf(0.95)(
+    dateDiff('minute', toDateTime(qc_done_time), toDateTime(firstPushedAt)),
+    qc_done_time IS NOT NULL AND firstPushedAt IS NOT NULL AND firstPushedAt != ''
+  ))                                                       AS push_p95_min
 
-  // ── v2 · QC On · No Publishing — pre-processing ──
-  ['v2_pub0_pre_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
-  ['v2_pub0_pre_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
-  // ── v2 · QC On · No Publishing — tech processing ──
-  ['v2_pub0_tech_avg_min', `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
-  ['v2_pub0_tech_p95_min', `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
-  // ── v2 · QC On · No Publishing — QC review ──
-  ['v2_pub0_qc_avg_min',   `SELECT round(avg(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
-  ['v2_pub0_qc_p95_min',   `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
-];
+FROM {{#${BASE_CARD}}} AS b
+WHERE version IS NOT NULL AND is_qc_on IS NOT NULL
+GROUP BY version, is_qc_on, is_publishing
+ORDER BY version DESC, is_qc_on DESC, is_publishing DESC
+`;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// ── Metabase API helper ───────────────────────────────────────────────────────
-// Runs any SQL that references {{#BASE_CARD}} and returns rows[0][0] as Number.
-function mbQuery(sql, retries = 3) {
+// ── Metabase API ──────────────────────────────────────────────────────────────
+function mbRun(sql, retries = 3) {
   const body = JSON.stringify({
     database: 350,
     type: 'native',
@@ -129,27 +118,26 @@ function mbQuery(sql, retries = 3) {
           'Content-Length': Buffer.byteLength(body),
           'x-api-key': API_KEY,
         },
-        timeout: 120_000,
+        timeout: 180_000,
       }, res => {
         let raw = '';
         res.on('data', c => raw += c);
         res.on('end', () => {
           try {
-            const data = JSON.parse(raw);
-            if (data.error) {
-              if (n > 1 && data.error.includes('MEMORY_LIMIT')) {
-                console.warn(`  Memory limit, retrying in 10s… (${n-1} left)`);
-                return sleep(10_000).then(() => attempt(n - 1));
+            const d = JSON.parse(raw);
+            if (d.error) {
+              if (n > 1 && d.error.includes('MEMORY_LIMIT')) {
+                console.warn(`  Memory limit, retrying in 15s… (${n-1} left)`);
+                return sleep(15_000).then(() => attempt(n - 1));
               }
-              return reject(new Error(data.error));
+              return reject(new Error(d.error));
             }
-            const val = data?.data?.rows?.[0]?.[0];
-            resolve(val === null || val === undefined ? null : Number(val));
+            resolve(d);
           } catch (e) { reject(new Error(`Parse error: ${e.message}`)); }
         });
       });
       req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('Timeout after 120s')); });
+      req.on('timeout', () => { req.destroy(); reject(new Error('Timeout after 180s')); });
       req.write(body);
       req.end();
     };
@@ -157,66 +145,141 @@ function mbQuery(sql, retries = 3) {
   });
 }
 
-// ── MAIN ─────────────────────────────────────────────────────────────────────
-(async () => {
-  const total = COUNT_QUERIES.length + SCALAR_QUERIES.length;
-  console.log(`[${new Date().toISOString()}] Running ${total} queries (${COUNT_QUERIES.length} counts + ${SCALAR_QUERIES.length} scalars)…`);
+// ── Map response rows → flat counts object ────────────────────────────────────
+function mapRows(apiData) {
+  const colNames = apiData.data.cols.map(c => c.name);
+  const idx      = name => colNames.indexOf(name);
+  const rows     = apiData.data.rows;
+  const counts   = {};
 
-  // Load existing data to preserve values on query failure
+  console.log(`  Columns: ${colNames.join(', ')}`);
+  console.log(`  Rows received: ${rows.length}`);
+
+  for (const row of rows) {
+    const str = name => { const v = row[idx(name)]; return v == null ? null : String(v); };
+    const num = name => { const v = row[idx(name)]; return v == null ? null : Number(v); };
+
+    const version      = str('version');
+    const is_qc_on     = num('is_qc_on');
+    const is_publishing = num('is_publishing');
+
+    const techPending  = num('tech_pending');
+    const doneNoQc     = num('done_no_qc');
+    const doneQcNoPush = num('done_qc_no_push');
+    const pushed       = num('pushed');
+    const waitLong     = num('waiting_push_long');
+    const waitShort    = num('waiting_push_short');
+    const entCount     = num('ent_count');
+    const techAvg      = num('tech_avg_min');
+    const techP95      = num('tech_p95_min');
+    const qcAvg        = num('qc_avg_min');
+    const qcP95        = num('qc_p95_min');
+    const preAvg       = num('pre_avg_min');
+    const preP95       = num('pre_p95_min');
+    const pushAvg      = num('push_avg_min');
+    const pushP95      = num('push_p95_min');
+
+    console.log(`  Row: version=${version} is_qc_on=${is_qc_on} is_publishing=${is_publishing} tech_pending=${techPending}`);
+
+    if (version === 'v1' && is_qc_on === 1) {
+      // SEG 1: v1 · QC On
+      Object.assign(counts, {
+        v1_qc1_delivered:    doneQcNoPush,
+        v1_qc1_qc_pending:   doneNoQc,
+        v1_qc1_tech_pending: techPending,
+        v1_qc1_ent_count:    entCount,
+        v1_qc1_tech_avg_min: techAvg,  v1_qc1_tech_p95_min: techP95,
+        v1_qc1_qc_avg_min:   qcAvg,    v1_qc1_qc_p95_min:   qcP95,
+      });
+
+    } else if (version === 'v1' && is_qc_on === 0) {
+      // SEG 2: v1 · QC Off (qc_done_time always NULL for this segment)
+      Object.assign(counts, {
+        v1_qc0_delivered:    doneNoQc,
+        v1_qc0_tech_pending: techPending,
+        v1_qc0_ent_count:    entCount,
+        v1_qc0_tech_avg_min: techAvg,  v1_qc0_tech_p95_min: techP95,
+      });
+
+    } else if (version === 'v2' && is_qc_on === 0) {
+      // SEG 3: v2 · QC Off
+      Object.assign(counts, {
+        v2_qc0_delivered:    doneNoQc,
+        v2_qc0_tech_pending: techPending,
+        v2_qc0_ent_count:    entCount,
+        v2_qc0_pre_avg_min:  preAvg,   v2_qc0_pre_p95_min:  preP95,
+        v2_qc0_tech_avg_min: techAvg,  v2_qc0_tech_p95_min: techP95,
+      });
+
+    } else if (version === 'v2' && is_qc_on === 1 && is_publishing === 1) {
+      // SEG 4: v2 · QC On · Publishing
+      Object.assign(counts, {
+        v2_pub1_delivered:    pushed,
+        v2_pub1_pub_pending:  waitLong,
+        v2_pub1_to_push:      waitShort,
+        v2_pub1_qc_pending:   doneNoQc,
+        v2_pub1_tech_pending: techPending,
+        v2_pub1_ent_count:    entCount,
+        v2_pub1_pre_avg_min:  preAvg,   v2_pub1_pre_p95_min:  preP95,
+        v2_pub1_tech_avg_min: techAvg,  v2_pub1_tech_p95_min: techP95,
+        v2_pub1_qc_avg_min:   qcAvg,    v2_pub1_qc_p95_min:   qcP95,
+        v2_pub1_push_avg_min: pushAvg,  v2_pub1_push_p95_min: pushP95,
+      });
+
+    } else if (version === 'v2' && is_qc_on === 1 && is_publishing !== 1) {
+      // SEG 5: v2 · QC On · No Publishing (is_publishing = 0 or null)
+      Object.assign(counts, {
+        v2_pub0_delivered:     doneQcNoPush,
+        v2_pub0_not_delivered: doneNoQc,
+        v2_pub0_tech_pending:  techPending,
+        v2_pub0_ent_count:     entCount,
+        v2_pub0_pre_avg_min:   preAvg,   v2_pub0_pre_p95_min:  preP95,
+        v2_pub0_tech_avg_min:  techAvg,  v2_pub0_tech_p95_min: techP95,
+        v2_pub0_qc_avg_min:    qcAvg,    v2_pub0_qc_p95_min:   qcP95,
+      });
+
+    } else {
+      console.log(`  ⚠ Unknown segment row — skipped.`);
+    }
+  }
+
+  return counts;
+}
+
+// ── MAIN ──────────────────────────────────────────────────────────────────────
+(async () => {
+  console.log(`[${new Date().toISOString()}] Running single GROUP BY query against card #${BASE_CARD}…`);
+
   let existing = {};
   try {
     existing = JSON.parse(fs.readFileSync(OUT_FILE, 'utf8'));
-    console.log('Loaded existing counts.json — will preserve values on failure.');
+    console.log('Loaded existing counts.json — preserving on failure.');
   } catch {
-    console.log('No existing counts.json — starting fresh.');
+    console.log('No existing counts.json.');
   }
 
-  const counts = { updated_at: new Date().toISOString() };
-  let failures = 0;
+  let counts = { updated_at: new Date().toISOString() };
 
-  // ── Phase 1: count queries ──────────────────────────────────────────────────
-  console.log(`\n[Phase 1] Count queries…`);
-  for (const [metric, where] of COUNT_QUERIES) {
-    process.stdout.write(`  ${metric}… `);
-    try {
-      const val = await mbQuery(`SELECT count() FROM ${C} WHERE ${where}`);
-      counts[metric] = val;
-      console.log((val ?? 0).toLocaleString());
-    } catch (err) {
-      failures++;
-      counts[metric] = existing[metric] ?? null;
-      console.error(`FAILED (kept: ${counts[metric]}) — ${err.message.slice(0, 100)}`);
-    }
-    await sleep(2_000);
+  try {
+    const apiData = await mbRun(SQL);
+    const rows    = apiData?.data?.rows ?? [];
+
+    if (rows.length === 0) throw new Error('Query returned 0 rows — possible auth or SQL error');
+
+    const mapped = mapRows(apiData);
+    const nKeys  = Object.keys(mapped).length;
+
+    if (nKeys === 0) throw new Error('mapRows produced 0 keys — check column names in response');
+
+    Object.assign(counts, mapped);
+    console.log(`\n✓ Mapped ${nKeys} metrics from ${rows.length} segment rows.`);
+
+  } catch (err) {
+    console.error(`\n✗ Query FAILED: ${err.message}`);
+    // Fall back to all existing values so nothing goes blank
+    counts = { ...existing, updated_at: existing.updated_at ?? counts.updated_at };
+    console.warn('Using preserved existing counts.json values.');
   }
-
-  // Only advance updated_at if at least one count succeeded
-  if (failures === COUNT_QUERIES.length) {
-    counts.updated_at = existing.updated_at ?? counts.updated_at;
-    console.warn('All count queries failed — preserving previous timestamp.');
-  }
-
-  // ── Phase 2: scalar queries (enterprise counts + timing) ───────────────────
-  console.log(`\n[Phase 2] Scalar queries (enterprise counts + avg/P95 timing)…`);
-  let scalarFailures = 0;
-
-  for (const [metric, sql] of SCALAR_QUERIES) {
-    process.stdout.write(`  ${metric}… `);
-    try {
-      const val = await mbQuery(sql);
-      counts[metric] = val;
-      console.log(val ?? '—');
-    } catch (err) {
-      scalarFailures++;
-      counts[metric] = existing[metric] ?? null;
-      console.error(`FAILED (kept: ${counts[metric]}) — ${err.message.slice(0, 100)}`);
-    }
-    await sleep(2_000);
-  }
-
-  const ok1 = COUNT_QUERIES.length - failures;
-  const ok2 = SCALAR_QUERIES.length - scalarFailures;
-  console.log(`\nDone. Counts: ${ok1}/${COUNT_QUERIES.length} · Scalars: ${ok2}/${SCALAR_QUERIES.length}`);
 
   fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
   fs.writeFileSync(OUT_FILE, JSON.stringify(counts, null, 2));
