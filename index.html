@@ -91,6 +91,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 .modal-toolbar input{flex:1;padding:7px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;outline:none;}
 .modal-toolbar input:focus{border-color:var(--blue);box-shadow:0 0 0 3px #2563eb18;}
 .modal-toolbar .limit-note{font-size:11px;color:var(--muted);}
+.refresh-btn{padding:6px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:12px;font-weight:600;color:var(--mid);cursor:pointer;white-space:nowrap;}
+.refresh-btn:hover{background:#e5e7eb;}
+.cache-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:10px;white-space:nowrap;}
+.cache-badge.fresh{background:#f0fdf4;color:#16a34a;border:1px solid #dcfce7;}
+.cache-badge.cached{background:#fffbeb;color:#d97706;border:1px solid #fef3c7;}
+.cache-badge.loading{background:#eff6ff;color:#2563eb;border:1px solid #dbeafe;}
 .modal-body{overflow-y:auto;flex:1;}
 .sku-table{width:100%;border-collapse:collapse;font-size:12px;}
 .sku-table th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding:8px 12px;text-align:left;position:sticky;top:0;background:#f8fafc;border-bottom:1px solid var(--border);white-space:nowrap;}
@@ -312,7 +318,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
     </div>
     <div class="modal-toolbar">
       <input type="text" id="modalSearch" placeholder="Search SKU ID or enterprise name…" oninput="filterRows()"/>
-      <span class="limit-note" id="limitNote"></span>
+      <span class="cache-badge loading" id="cacheBadge">⏳ Loading…</span>
+      <button class="refresh-btn" onclick="forceRefresh()" title="Force refresh from Metabase, bypassing cache">↻ Refresh</button>
     </div>
     <div class="modal-body" id="modalBody">
       <div class="loading"><div class="spinner"></div>Loading SKUs…</div>
@@ -326,10 +333,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 
 <script>
 // ══ CONFIG ══
-const MB_BASE   = 'https://metabase.spyne.ai';
-const MB_API_KEY = 'mb_BbbOBUMM+s1sUJTquApMnybzWwQtIjlpSmpnATkDyOc=';
-const BASE_CARD  = 12816; // slim base card (is_360=0)
-const LIMIT      = 500;
+const PROXY    = 'http://localhost:8765';   // local Python proxy server
+const BASE_CARD = 12816;                    // slim Metabase card (is_360=0)
+const LIMIT     = 500;
 
 // ══ TABS ══
 function showPage(name, el) {
@@ -340,120 +346,152 @@ function showPage(name, el) {
 }
 
 // ══ MODAL STATE ══
-let _allRows = [], _filtered = [], _sortCol = -1, _sortAsc = true;
-const COLS = ['#','SKU ID','Enterprise','Status','CRM Status','AI Created','Processed At','Done Time','QC Done','First Pushed'];
+let _allRows=[], _filtered=[], _sortCol=-1, _sortAsc=true, _currentWhere='', _currentTotal=0;
+const COLS=['#','SKU ID','Enterprise','Status','CRM Status','AI Created','Processed At','Done Time','QC Done','First Pushed'];
 
-function fmtTs(v) {
-  if (!v) return '<span class="ts null">—</span>';
-  try {
-    const d = new Date(v);
+function fmtTs(v){
+  if(!v) return '<span class="ts null">—</span>';
+  try{
+    const d=new Date(v);
     return `<span class="ts">${d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'})} ${d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</span>`;
-  } catch(e){ return `<span class="ts">${v}</span>`; }
+  }catch(e){return `<span class="ts">${v}</span>`;}
 }
 
-function renderTable(rows) {
-  const body = document.getElementById('modalBody');
-  if (!rows || rows.length===0) {
-    body.innerHTML = '<div class="loading" style="color:var(--muted)">No SKUs found</div>';
+function setCacheBadge(cached, ageS){
+  const b=document.getElementById('cacheBadge');
+  if(cached){
+    const mins=Math.floor(ageS/60), secs=ageS%60;
+    const age=mins>0?`${mins}m ${secs}s ago`:`${secs}s ago`;
+    b.className='cache-badge cached';
+    b.textContent=`📦 Cached · ${age}`;
+    b.title=`Served from cache. Expires in ${Math.max(0,300-ageS)}s. Click ↻ Refresh to force reload.`;
+  } else {
+    b.className='cache-badge fresh';
+    b.textContent='✅ Live · just fetched';
+    b.title='Fresh data from Metabase';
+  }
+}
+
+function renderTable(rows){
+  const body=document.getElementById('modalBody');
+  if(!rows||rows.length===0){
+    body.innerHTML='<div class="loading" style="color:var(--muted)">No SKUs found for this filter</div>';
     return;
   }
-  const thead = `<thead><tr>${COLS.map((c,i)=>
-    i===0 ? `<th style="width:36px">#</th>` :
+  const thead=`<thead><tr>${COLS.map((c,i)=>
+    i===0?`<th style="width:36px">#</th>`:
     `<th class="col-sort" onclick="sortBy(${i-1})">${c} <span class="sort-arrow">${_sortCol===i-1?(_sortAsc?'▲':'▼'):'⇅'}</span></th>`
   ).join('')}</tr></thead>`;
-  const tbody = rows.map((r,i)=>{
-    const skuFull = r[0]||'';
-    const skuShort = skuFull.length>20 ? skuFull.slice(0,20)+'…' : skuFull;
+  const tbody=rows.map((r,i)=>{
+    const skuFull=r[0]||'';
+    const skuShort=skuFull.length>22?skuFull.slice(0,22)+'…':skuFull;
+    const statusColor=r[2]==='Done'?'#f0fdf4,#16a34a':'#fffbeb,#d97706';
+    const [bg,fg]=statusColor.split(',');
     return `<tr>
       <td style="color:var(--muted);font-size:11px;width:36px">${i+1}</td>
-      <td><span class="sku-id" title="${skuFull}" onclick="copySkuId('${skuFull}')">${skuShort}</span>
-          <button class="copy-btn" onclick="copySkuId('${skuFull}')" title="Copy full SKU ID">⎘</button></td>
+      <td><span class="sku-id" title="${skuFull}" onclick="copySkuId('${skuFull}',event)">${skuShort}</span>
+          <button class="copy-btn" onclick="copySkuId('${skuFull}',event)" title="Copy full SKU ID">⎘</button></td>
       <td><span class="ent-name" title="${r[1]||''}">${r[1]||'—'}</span></td>
-      <td><span class="status-badge" style="background:${r[2]==='Done'?'#f0fdf4':'#fffbeb'};color:${r[2]==='Done'?'#16a34a':'#d97706'}">${r[2]||'—'}</span></td>
+      <td><span class="status-badge" style="background:${bg};color:${fg}">${r[2]||'—'}</span></td>
       <td style="font-size:11px;color:var(--muted)">${r[3]||'—'}</td>
       ${fmtTs(r[4])}${fmtTs(r[5])}${fmtTs(r[6])}${fmtTs(r[7])}${fmtTs(r[8])}
     </tr>`;
   }).join('');
-  body.innerHTML = `<table class="sku-table">${thead}<tbody>${tbody}</tbody></table>`;
-  document.getElementById('footerLeft').textContent = `Showing ${rows.length.toLocaleString()} SKUs`;
+  body.innerHTML=`<table class="sku-table">${thead}<tbody>${tbody}</tbody></table>`;
+  document.getElementById('footerLeft').textContent=`Showing ${rows.length.toLocaleString()} of ${_currentTotal.toLocaleString()} total SKUs`;
+  document.getElementById('footerRight').textContent=rows.length>=LIMIT?`Top ${LIMIT} by recency`:'All matching SKUs loaded';
 }
 
-function sortBy(col) {
-  if (_sortCol===col) _sortAsc=!_sortAsc; else { _sortCol=col; _sortAsc=true; }
-  const sorted = [..._filtered].sort((a,b)=>{
-    const av=a[col]??'', bv=b[col]??'';
-    return _sortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+function sortBy(col){
+  if(_sortCol===col)_sortAsc=!_sortAsc; else {_sortCol=col;_sortAsc=true;}
+  const sorted=[..._filtered].sort((a,b)=>{
+    const av=a[col]??'',bv=b[col]??'';
+    return _sortAsc?String(av).localeCompare(String(bv)):String(bv).localeCompare(String(av));
   });
   renderTable(sorted);
 }
 
-function filterRows() {
-  const q = document.getElementById('modalSearch').value.toLowerCase().trim();
-  _filtered = q ? _allRows.filter(r=>(r[0]||'').toLowerCase().includes(q)||(r[1]||'').toLowerCase().includes(q)) : [..._allRows];
-  _sortCol = -1;
+function filterRows(){
+  const q=document.getElementById('modalSearch').value.toLowerCase().trim();
+  _filtered=q?_allRows.filter(r=>(r[0]||'').toLowerCase().includes(q)||(r[1]||'').toLowerCase().includes(q)):[..._allRows];
+  _sortCol=-1;
   renderTable(_filtered);
-  document.getElementById('footerLeft').textContent = `Showing ${_filtered.length.toLocaleString()} of ${_allRows.length.toLocaleString()} SKUs`;
 }
 
-function copySkuId(id) {
+function copySkuId(id,evt){
   navigator.clipboard.writeText(id).then(()=>{
-    const el = event.target; const orig = el.textContent;
-    el.textContent = '✓'; setTimeout(()=>el.textContent=orig, 1200);
+    const el=evt.target; const orig=el.textContent;
+    el.textContent='✓'; setTimeout(()=>el.textContent=orig,1200);
   }).catch(()=>alert(id));
 }
 
-// ══ FETCH & OPEN MODAL ══
-async function openModal(title, total, whereClause) {
-  document.getElementById('modalTitle').textContent = title;
-  document.getElementById('modalCount').textContent = `${total.toLocaleString()} total`;
-  document.getElementById('modalSearch').value = '';
-  document.getElementById('limitNote').textContent = `Loading up to ${LIMIT} SKUs…`;
-  document.getElementById('footerLeft').textContent = '';
-  document.getElementById('footerRight').textContent = '';
-  document.getElementById('modalBody').innerHTML = '<div class="loading"><div class="spinner"></div>Fetching from Metabase…</div>';
-  document.getElementById('modalOverlay').classList.add('open');
-
-  try {
-    const sql = `SELECT sku_id, enterprise_name, status, crm_status, ai_sku_created_on, processedAt, done_time, qc_done_time, firstPushedAt
+// ══ CORE FETCH (via proxy) ══
+async function _fetchQuery(whereClause, force=false){
+  const sql=`SELECT sku_id, enterprise_name, status, crm_status, ai_sku_created_on, processedAt, done_time, qc_done_time, firstPushedAt
 FROM {{#${BASE_CARD}}} AS b
 WHERE ${whereClause}
 ORDER BY ai_sku_created_on DESC
 LIMIT ${LIMIT}`;
 
-    const resp = await fetch(`${MB_BASE}/api/dataset`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': MB_API_KEY },
-      body: JSON.stringify({
-        database: 350,
-        type: 'native',
-        native: {
-          query: sql,
-          template_tags: {
-            [`#${BASE_CARD}`]: { id: `card-${BASE_CARD}`, name: `#${BASE_CARD}`, display_name: `Card ${BASE_CARD}`, type: 'card', card_id: BASE_CARD }
-          }
-        }
-      })
-    });
-    const data = await resp.json();
-    if (data?.error) throw new Error(data.error);
-    _allRows = data?.data?.rows || [];
-    _filtered = [..._allRows];
-    _sortCol = -1;
+  const resp=await fetch(`${PROXY}/query`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sql, force})
+  });
+  if(!resp.ok) throw new Error(`Proxy error ${resp.status}: ${await resp.text()}`);
+  return resp.json();
+}
+
+// ══ OPEN MODAL ══
+async function openModal(title, total, whereClause){
+  _currentWhere=whereClause;
+  _currentTotal=total;
+  document.getElementById('modalTitle').textContent=title;
+  document.getElementById('modalCount').textContent=`${total.toLocaleString()} total`;
+  document.getElementById('modalSearch').value='';
+  document.getElementById('footerLeft').textContent='';
+  document.getElementById('footerRight').textContent='';
+  document.getElementById('modalBody').innerHTML='<div class="loading"><div class="spinner"></div>Fetching from Metabase…</div>';
+  const badge=document.getElementById('cacheBadge');
+  badge.className='cache-badge loading'; badge.textContent='⏳ Loading…';
+  document.getElementById('modalOverlay').classList.add('open');
+  await _load(false);
+}
+
+async function _load(force){
+  document.getElementById('modalBody').innerHTML='<div class="loading"><div class="spinner"></div>'+(force?'Force refreshing from Metabase…':'Fetching from Metabase…')+'</div>';
+  const badge=document.getElementById('cacheBadge');
+  badge.className='cache-badge loading'; badge.textContent='⏳ Loading…';
+  try{
+    const data=await _fetchQuery(_currentWhere, force);
+    if(data.error) throw new Error(data.error);
+    _allRows=data.rows||[];
+    _filtered=[..._allRows];
+    _sortCol=-1;
+    setCacheBadge(data.cached, data.age_s||0);
     renderTable(_filtered);
-    document.getElementById('limitNote').textContent = _allRows.length >= LIMIT ? `Top ${LIMIT} shown` : '';
-    document.getElementById('footerLeft').textContent = `Showing ${_allRows.length.toLocaleString()} of ${total.toLocaleString()} SKUs`;
-    document.getElementById('footerRight').textContent = _allRows.length >= LIMIT ? `Showing most recent ${LIMIT}` : 'All SKUs loaded';
-  } catch(err) {
-    document.getElementById('modalBody').innerHTML = `<div class="error-msg">⚠ Failed to load: ${err.message}<br><br><small>Make sure you are on the same network as Metabase (metabase.spyne.ai)</small></div>`;
+  }catch(err){
+    document.getElementById('modalBody').innerHTML=`
+      <div class="error-msg">
+        ⚠ ${err.message}<br><br>
+        <small>Is the proxy server running? Run:<br>
+        <code style="background:#f5f5f5;padding:4px 8px;border-radius:4px;font-size:12px">python3 sku_dashboard_server.py</code><br>
+        then reload this page from <strong>http://localhost:8765</strong></small>
+      </div>`;
+    badge.className='cache-badge cached'; badge.textContent='⚠ Error';
   }
 }
 
-function closeModal() {
-  document.getElementById('modalOverlay').classList.remove('open');
-  _allRows = []; _filtered = [];
+function forceRefresh(){
+  if(_currentWhere) _load(true);
 }
 
-document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
+function closeModal(){
+  document.getElementById('modalOverlay').classList.remove('open');
+  _allRows=[]; _filtered=[];
+}
+
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
 </script>
 </body>
 </html>
