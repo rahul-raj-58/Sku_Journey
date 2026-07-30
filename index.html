@@ -135,6 +135,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
     <span class="chip live">● Live</span>
     <span class="chip dark">is_360 = 0</span>
     <span class="updated-badge" id="updatedBadge">Fetching…</span>
+    <span id="liveChip" style="display:none;font-size:10px;font-weight:700;padding:3px 8px;border-radius:10px;background:#16a34a22;color:#4ade80;border:1px solid #16a34a44;white-space:nowrap;">⚡ Live</span>
     <button id="refreshBtn" onclick="handleRefresh()">↻ Refresh</button>
   </div>
 </div>
@@ -517,7 +518,7 @@ function fmtAge(isoStr) {
 // Get a token at: github.com/settings/tokens → New token → check "workflow"
 const GH_OWNER = 'rahul-raj-58';
 const GH_REPO  = 'Sku_Journey';
-const GH_TOKEN = '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';  // ← paste your GitHub PAT here
+const GH_TOKEN = '';  // ← paste your GitHub PAT here
 const GH_BRANCH = 'main';
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -651,6 +652,12 @@ function showWarning(msg) {
 
 // Update "X ago" badge every minute without re-fetching
 setInterval(() => { if (_lastUpdated) set('updatedBadge', fmtAge(_lastUpdated)); }, 60_000);
+
+// Show ⚡ Live chip if token is set
+if (GH_TOKEN) {
+  const chip = document.getElementById('liveChip');
+  if (chip) chip.style.display = 'inline';
+}
 
 // Initial load
 loadData();
