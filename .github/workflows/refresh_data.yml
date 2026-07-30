@@ -1,11 +1,13 @@
 name: Refresh SKU Dashboard Data
 
 on:
+  push:
+    branches: [main]          # runs immediately on every push → creates counts.json right away
+    paths-ignore:
+      - 'data/counts.json'    # don't re-trigger when Actions itself commits the file
   schedule:
-    # Runs every hour at :00 — adjust cron to change frequency
-    # Format: minute hour day month weekday (UTC)
-    - cron: '0 * * * *'
-  workflow_dispatch:   # also allows a manual "Run workflow" button in GitHub UI
+    - cron: '0 * * * *'      # also runs every hour automatically
+  workflow_dispatch:          # manual "Run workflow" button in GitHub Actions UI
 
 jobs:
   refresh:
