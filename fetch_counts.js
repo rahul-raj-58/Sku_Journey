@@ -138,3 +138,4 @@ function mbQuery(sql) {
   fs.writeFileSync(OUT_FILE, JSON.stringify(counts, null, 2));
   console.log(`Written to ${OUT_FILE}`);
 })();
+
