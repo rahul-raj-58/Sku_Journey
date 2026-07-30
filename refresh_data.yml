@@ -1,0 +1,37 @@
+name: Refresh SKU Dashboard Data
+
+on:
+  schedule:
+    # Runs every hour at :00 — adjust cron to change frequency
+    # Format: minute hour day month weekday (UTC)
+    - cron: '0 * * * *'
+  workflow_dispatch:   # also allows a manual "Run workflow" button in GitHub UI
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit data/counts.json back to repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch counts from Metabase
+        env:
+          MB_API_KEY: ${{ secrets.MB_API_KEY }}
+        run: node fetch_counts.js
+
+      - name: Commit updated counts
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add data/counts.json
+          # Only commit if something changed
+          git diff --staged --quiet || git commit -m "chore: refresh SKU counts [skip ci]"
+          git push
