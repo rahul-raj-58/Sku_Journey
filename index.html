@@ -122,7 +122,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
     <span class="chip live">● Live</span>
     <span class="chip dark">is_360 = 0</span>
     <span class="updated-badge" id="updatedBadge">Fetching…</span>
-    <button id="refreshBtn" onclick="loadData(true)">↻ Refresh</button>
+    <button id="refreshBtn" onclick="handleRefresh()">↻ Refresh</button>
   </div>
 </div>
 
@@ -430,69 +430,78 @@ const SEED = {
 
 // ── LOAD DATA ─────────────────────────────────────────────────────────────────
 let _lastUpdated = null;
-let _timerInterval = null;
 
-function startRefreshTimer(btn) {
-  const start = Date.now();
-  btn.disabled = true;
-  clearInterval(_timerInterval);
-  _timerInterval = setInterval(() => {
-    const s = ((Date.now() - start) / 1000).toFixed(1);
-    btn.textContent = `⏳ ${s}s`;
-  }, 100);
-}
-
-function stopRefreshTimer(btn) {
-  clearInterval(_timerInterval);
-  btn.textContent = '↻ Refresh';
-  btn.disabled = false;
-}
-
-async function loadData(manual = false) {
-  const btn = document.getElementById('refreshBtn');
-
-  if (manual) {
-    startRefreshTimer(btn);
-  } else {
-    if (btn) { btn.textContent = '⏳ 0.0s'; btn.disabled = true; }
+async function fetchCounts() {
+  const resp = await fetch(`./data/counts.json?t=${Date.now()}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const d = await resp.json();
+  // Replace any nulls with seed fallback so dashboard never goes blank
+  for (const key of Object.keys(SEED)) {
+    if (key === 'updated_at') continue;
+    if (d[key] === null || d[key] === undefined) d[key] = SEED[key];
   }
+  return d;
+}
 
-  // Always show seed data immediately so dashboard is never blank
+// Called on page load — silent, no timer
+async function loadData() {
+  const btn = document.getElementById('refreshBtn');
   populate(SEED);
   _lastUpdated = SEED.updated_at;
   set('updatedBadge', fmtAge(SEED.updated_at));
   document.getElementById('loadOverlay').classList.add('done');
-
   try {
-    const url = `./data/counts.json?t=${Date.now()}`;
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const d = await resp.json();
-
-    // Replace nulls with seed fallback so dashboard never goes blank
-    for (const key of Object.keys(SEED)) {
-      if (key === 'updated_at') continue;
-      if (d[key] === null || d[key] === undefined) d[key] = SEED[key];
-    }
-
+    const d = await fetchCounts();
     populate(d);
     _lastUpdated = d.updated_at;
     set('updatedBadge', fmtAge(d.updated_at));
     document.getElementById('errBanner').style.display = 'none';
   } catch (err) {
-    const banner = document.getElementById('errBanner');
-    banner.style.display = 'block';
-    banner.style.background = '#fffbeb';
-    banner.style.borderBottomColor = '#fde68a';
-    banner.style.color = '#92400e';
-    banner.textContent = `⚠ Showing cached data (${fmtAge(SEED.updated_at)}). `
-      + `Live counts unavailable: ${err.message}. `
-      + `GitHub Actions will refresh data on next scheduled run.`;
-  } finally {
-    if (manual) stopRefreshTimer(btn);
-    else if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+    showWarning(`Showing cached data. Live counts unavailable: ${err.message}`);
+  }
+  if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+}
+
+// Called on button click — shows live elapsed timer
+async function handleRefresh() {
+  const btn = document.getElementById('refreshBtn');
+  if (btn.disabled) return;
+
+  const start = Date.now();
+  btn.disabled = true;
+
+  // Live timer updates every 100ms
+  const timer = setInterval(() => {
+    btn.textContent = `⏳ ${((Date.now() - start) / 1000).toFixed(1)}s`;
+  }, 100);
+
+  try {
+    const d = await fetchCounts();
+    populate(d);
+    _lastUpdated = d.updated_at;
+    set('updatedBadge', fmtAge(d.updated_at));
+    document.getElementById('errBanner').style.display = 'none';
+
+    // Show "Done Xs" for 2s then reset
+    clearInterval(timer);
+    btn.textContent = `✓ Done ${((Date.now() - start) / 1000).toFixed(1)}s`;
+    setTimeout(() => { btn.textContent = '↻ Refresh'; btn.disabled = false; }, 2000);
+  } catch (err) {
+    clearInterval(timer);
+    showWarning(`Showing cached data. Live counts unavailable: ${err.message}`);
+    btn.textContent = '↻ Refresh';
+    btn.disabled = false;
   }
 }
+
+function showWarning(msg) {
+  const banner = document.getElementById('errBanner');
+  banner.style.cssText = 'display:block;background:#fffbeb;border-bottom:2px solid #fde68a;padding:10px 32px;font-size:13px;color:#92400e;';
+  banner.textContent = `⚠ ${msg}`;
+}
+
+// Refresh "X minutes ago" badge every minute
+setInterval(() => { if (_lastUpdated) set('updatedBadge', fmtAge(_lastUpdated)); }, 60_000);
 
 // Refresh the "X minutes ago" badge every minute without re-fetching
 setInterval(() => {
