@@ -1,0 +1,18 @@
+{
+  "updated_at": "2026-07-30T13:01:47Z",
+  "v1_qc1_delivered": 540093,
+  "v1_qc1_qc_pending": 23849,
+  "v1_qc1_tech_pending": 395,
+  "v1_qc0_delivered": 297013,
+  "v1_qc0_tech_pending": 239,
+  "v2_qc0_delivered": 159725,
+  "v2_qc0_tech_pending": 333,
+  "v2_pub1_delivered": 76223,
+  "v2_pub1_pub_pending": 991,
+  "v2_pub1_to_push": 91,
+  "v2_pub1_qc_pending": 166,
+  "v2_pub1_tech_pending": 7,
+  "v2_pub0_delivered": 11445,
+  "v2_pub0_not_delivered": 47,
+  "v2_pub0_tech_pending": 4
+}
