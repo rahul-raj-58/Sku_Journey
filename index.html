@@ -1,613 +1,224 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>SKU Journey Tracker</title>
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#f1f4f8;--card:#fff;--dark:#0d1117;--mid:#374151;--muted:#6b7280;--border:#e5e7eb;
-  --green:#16a34a;--green-bg:#f0fdf4;--green-light:#dcfce7;
-  --amber:#d97706;--amber-bg:#fffbeb;--amber-light:#fef3c7;
-  --red:#dc2626;--red-bg:#fef2f2;--red-light:#fee2e2;
-  --blue:#2563eb;--blue-bg:#eff6ff;--blue-light:#dbeafe;
-  --purple:#7c3aed;--purple-bg:#f5f3ff;--purple-light:#ede9fe;
-}
-body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--dark);min-height:100vh;}
+#!/usr/bin/env node
+/**
+ * fetch_counts.js — Metabase → data/counts.json
+ * ================================================
+ * Run by GitHub Actions every hour (see .github/workflows/refresh-data.yml).
+ * Writes ./data/counts.json which the dashboard HTML reads.
+ *
+ * Local test:
+ *   MB_API_KEY=mb_... node fetch_counts.js
+ */
 
-/* ── HEADER ── */
-.hdr{background:var(--dark);padding:16px 32px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
-.hdr h1{color:#fff;font-size:17px;font-weight:700;}
-.hdr p{color:#8892b0;font-size:11px;margin-top:2px;}
-.hdr-right{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
-.chip{font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;letter-spacing:.3px;}
-.chip.live{background:#16a34a22;color:#4ade80;border:1px solid #16a34a44;}
-.chip.dark{background:rgba(255,255,255,.07);color:#c9d1e0;}
-.updated-badge{font-size:11px;color:#8892b0;white-space:nowrap;}
-#refreshBtn{padding:5px 12px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#c9d1e0;font-size:12px;cursor:pointer;transition:all .15s;min-width:100px;text-align:center;}
-#refreshBtn:hover{background:rgba(255,255,255,.15);}
-#refreshBtn:disabled{opacity:.6;cursor:not-allowed;}
+'use strict';
+const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
 
-/* ── LOADING OVERLAY ── */
-#loadOverlay{position:fixed;inset:0;background:rgba(13,17,23,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .3s;}
-#loadOverlay.done{opacity:0;pointer-events:none;}
-.load-spinner{width:36px;height:36px;border:3px solid rgba(255,255,255,.2);border-top-color:#60a5fa;border-radius:50%;animation:spin .7s linear infinite;}
-.load-text{color:#94a3b8;font-size:14px;}
-@keyframes spin{to{transform:rotate(360deg)}}
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+const MB_HOST   = 'metabase.spyne.ai';
+const API_KEY   = process.env.MB_API_KEY;
+const BASE_CARD = 12816;  // _SKU Journey Base v2 (is_360=0, all statuses)
+const OUT_FILE  = path.join(__dirname, 'data', 'counts.json');
+// ─────────────────────────────────────────────────────────────────────────────
 
-/* ── ERROR BANNER ── */
-#errBanner{display:none;background:#fef2f2;border-bottom:2px solid #fecaca;padding:10px 32px;font-size:13px;color:#dc2626;}
-
-/* ── TABS ── */
-.tabs{background:#1a2332;display:flex;padding:0 32px;border-bottom:1px solid #263349;}
-.tab{padding:12px 20px;font-size:13px;font-weight:600;color:#8892b0;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;}
-.tab:hover{color:#c9d1e0;} .tab.active{color:#60a5fa;border-bottom-color:#60a5fa;}
-
-/* ── SUMBAR ── */
-.sumbar{background:#1e293b;display:flex;border-bottom:1px solid #263349;flex-wrap:wrap;}
-.sum-item{flex:1;min-width:160px;padding:12px 20px;border-right:1px solid #263349;}
-.sum-item:last-child{border-right:none;}
-.sl{color:#8892b0;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;}
-.sv{color:#fff;font-size:20px;font-weight:800;margin-top:2px;min-width:60px;}
-.ss{color:#94a3b8;font-size:11px;margin-top:1px;}
-
-/* ── MAIN ── */
-.main{max-width:1440px;margin:0 auto;padding:24px;}
-.page{display:none;} .page.active{display:block;}
-
-/* ── SEGMENT CARD ── */
-.seg{background:var(--card);border:1px solid var(--border);border-radius:14px;margin-bottom:20px;overflow:hidden;}
-.seg-hdr{display:flex;align-items:center;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
-.seg-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;border:1.5px solid currentColor;}
-.seg-badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor;}
-.b-v1qc{color:#2563eb;background:#2563eb0d;} .b-v1no{color:#7c3aed;background:#7c3aed0d;}
-.b-v2no{color:#0891b2;background:#0891b20d;} .b-v2pub{color:#059669;background:#0596690d;}
-.b-v2nopub{color:#d97706;background:#d977060d;}
-.seg-title{font-size:14px;font-weight:700;}
-.seg-flow{font-size:11px;color:var(--muted);font-family:monospace;background:var(--bg);padding:4px 10px;border-radius:6px;}
-.seg-total{font-size:13px;color:var(--muted);margin-left:auto;}
-.seg-total strong{font-size:18px;font-weight:800;color:var(--dark);}
-.seg-mb-link{font-size:11px;font-weight:600;color:var(--blue);text-decoration:none;white-space:nowrap;padding:4px 10px;border:1px solid var(--blue-light);border-radius:8px;background:var(--blue-bg);}
-.seg-mb-link:hover{background:#dbeafe;}
-
-/* ── STATE TILES ── */
-.states{display:flex;flex-wrap:wrap;}
-.state-tile{flex:1;min-width:150px;padding:18px 20px;border-right:1px solid var(--border);position:relative;overflow:hidden;}
-.state-tile:last-child{border-right:none;}
-.state-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent,#888);}
-.t-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:8px;}
-.t-num{font-size:32px;font-weight:900;line-height:1;letter-spacing:-1px;transition:all .3s;}
-.t-pct{font-size:11px;font-weight:600;margin-top:5px;padding:2px 7px;border-radius:8px;display:inline-block;}
-.t-skeleton{display:inline-block;background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 50%,#e5e7eb 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:6px;}
-@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-
-.tile-delivered{--accent:var(--green)} .tile-delivered .t-num{color:var(--green)} .tile-delivered .t-pct{background:var(--green-light);color:var(--green);}
-.tile-tech{--accent:var(--amber)} .tile-tech .t-num{color:var(--amber)} .tile-tech .t-pct{background:var(--amber-light);color:var(--amber);}
-.tile-qc{--accent:var(--blue)} .tile-qc .t-num{color:var(--blue)} .tile-qc .t-pct{background:var(--blue-light);color:var(--blue);}
-.tile-pubpend{--accent:var(--red)} .tile-pubpend .t-num{color:var(--red)} .tile-pubpend .t-pct{background:var(--red-light);color:var(--red);}
-.tile-tobepushed{--accent:var(--purple)} .tile-tobepushed .t-num{color:var(--purple)} .tile-tobepushed .t-pct{background:var(--purple-light);color:var(--purple);}
-.tile-notdel{--accent:var(--red)} .tile-notdel .t-num{color:var(--red)} .tile-notdel .t-pct{background:var(--red-light);color:var(--red);}
-
-/* ── ENTERPRISE COUNT CHIP ── */
-.seg-ent{font-size:11px;color:var(--muted);padding:3px 10px;background:var(--bg);border:1px solid var(--border);border-radius:12px;white-space:nowrap;}
-.seg-ent strong{color:var(--dark);font-weight:800;}
-
-/* ── TIMING ROW ── */
-.timings{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 2rem;padding:.65rem 1.25rem;background:#fafbfd;border-top:1px solid var(--border);font-size:12px;}
-.t-step{display:inline-flex;align-items:baseline;gap:.35rem;}
-.t-step-name{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);}
-.t-step-sep{color:#cbd5e1;font-weight:300;font-size:16px;line-height:1;}
-.t-step-vals{color:var(--muted);}
-.t-step-vals strong{color:var(--dark);font-weight:700;}
-.t-step-vals .p95{color:var(--amber);}
-
-/* ── STATUS DISTRIBUTION ── */
-.dist-card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:20px;}
-.dist-hdr{padding:18px 24px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;}
-.dist-table{width:100%;border-collapse:collapse;}
-.dist-table th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:10px 20px;text-align:left;border-bottom:1px solid var(--border);}
-.dist-table td{padding:11px 20px;font-size:13px;border-bottom:1px solid #f8fafc;}
-.dist-table tr:last-child td{border-bottom:none;} .dist-table tr:hover td{background:var(--bg);}
-.dist-bar-bg{background:#f1f5f9;border-radius:4px;height:7px;} .dist-bar-fill{height:100%;border-radius:4px;}
-.dist-count{font-weight:700;font-size:14px;width:100px;text-align:right;}
-.dist-pct{font-size:12px;font-weight:600;color:var(--muted);width:50px;text-align:right;}
-.status-badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px;}
-</style>
-</head>
-<body>
-
-<!-- Loading overlay -->
-<div id="loadOverlay">
-  <div class="load-spinner"></div>
-  <div class="load-text">Loading live data…</div>
-</div>
-
-<!-- Error banner -->
-<div id="errBanner"></div>
-
-<div class="hdr">
-  <div>
-    <h1>SKU Journey Tracker</h1>
-    <p>Filter: is_360 = 0 / false &nbsp;·&nbsp; All statuses &nbsp;·&nbsp; Prod-ClickHouse &nbsp;·&nbsp; Card #12816</p>
-  </div>
-  <div class="hdr-right">
-    <span class="chip live">● Live</span>
-    <span class="chip dark">is_360 = 0</span>
-    <span class="updated-badge" id="updatedBadge">Fetching…</span>
-    <button id="refreshBtn" onclick="handleRefresh()">↻ Refresh</button>
-  </div>
-</div>
-
-<div class="tabs">
-  <div class="tab active" onclick="showPage('journey',this)">Journey View</div>
-  <div class="tab" onclick="showPage('status',this)">Status Distribution</div>
-</div>
-
-<!-- Sumbar — totals filled by JS -->
-<div class="sumbar">
-  <div class="sum-item"><div class="sl">Total SKUs</div><div class="sv" id="sum-total">—</div><div class="ss">is_360 = 0 · all statuses</div></div>
-  <div class="sum-item"><div class="sl">v1 · QC On</div><div class="sv" id="sum-v1q1">—</div><div class="ss">ai → done → qc</div></div>
-  <div class="sum-item"><div class="sl">v1 · QC Off</div><div class="sv" id="sum-v1q0">—</div><div class="ss">ai → done</div></div>
-  <div class="sum-item"><div class="sl">v2 · QC Off</div><div class="sv" id="sum-v2q0">—</div><div class="ss">processed → ai → done</div></div>
-  <div class="sum-item"><div class="sl">v2 · Publishing</div><div class="sv" id="sum-v2pub1">—</div><div class="ss">→ qc → pushed</div></div>
-  <div class="sum-item"><div class="sl">v2 · No Publish</div><div class="sv" id="sum-v2pub0">—</div><div class="ss">→ qc done</div></div>
-</div>
-
-<div class="main">
-
-<!-- ══ JOURNEY PAGE ══ -->
-<div class="page active" id="page-journey">
-
-  <!-- SEG 1: v1 QC On -->
-  <div class="seg">
-    <div class="seg-hdr">
-      <span class="seg-badge b-v1qc"><span class="dot"></span>v1 · QC On</span>
-      <span class="seg-title">v1 — QC enabled</span>
-      <span class="seg-flow">ai_sku_created_on → done_time → qc_done_time</span>
-      <span class="seg-total">Total: <strong id="seg-v1q1-total">—</strong></span>
-      <span class="seg-ent">Enterprises: <strong id="ent-v1q1">—</strong></span>
-      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
-    </div>
-    <div class="states">
-      <div class="state-tile tile-delivered">
-        <div class="t-label">Delivered</div>
-        <div class="t-num" id="cnt-v1q1-delivered">—</div>
-        <div class="t-pct" id="pct-v1q1-delivered">—</div>
-      </div>
-      <div class="state-tile tile-qc">
-        <div class="t-label">QC Pending</div>
-        <div class="t-num" id="cnt-v1q1-qc-pending">—</div>
-        <div class="t-pct" id="pct-v1q1-qc-pending">—</div>
-      </div>
-      <div class="state-tile tile-tech">
-        <div class="t-label">Tech Processing Pending</div>
-        <div class="t-num" id="cnt-v1q1-tech-pending">—</div>
-        <div class="t-pct" id="pct-v1q1-tech-pending">—</div>
-      </div>
-    </div>
-    <div class="timings">
-      <span class="t-step"><span class="t-step-name">⏱ Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v1q1-tech-avg">—</strong> · P95 <strong class="p95" id="t-v1q1-tech-p95">—</strong></span></span>
-      <span class="t-step-sep">→</span>
-      <span class="t-step"><span class="t-step-name">QC Review</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v1q1-qc-avg">—</strong> · P95 <strong class="p95" id="t-v1q1-qc-p95">—</strong></span></span>
-    </div>
-  </div>
-
-  <!-- SEG 2: v1 QC Off -->
-  <div class="seg">
-    <div class="seg-hdr">
-      <span class="seg-badge b-v1no"><span class="dot"></span>v1 · QC Off</span>
-      <span class="seg-title">v1 — QC disabled</span>
-      <span class="seg-flow">ai_sku_created_on → done_time</span>
-      <span class="seg-total">Total: <strong id="seg-v1q0-total">—</strong></span>
-      <span class="seg-ent">Enterprises: <strong id="ent-v1q0">—</strong></span>
-      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
-    </div>
-    <div class="states">
-      <div class="state-tile tile-delivered">
-        <div class="t-label">Delivered</div>
-        <div class="t-num" id="cnt-v1q0-delivered">—</div>
-        <div class="t-pct" id="pct-v1q0-delivered">—</div>
-      </div>
-      <div class="state-tile tile-tech">
-        <div class="t-label">Tech Processing Pending</div>
-        <div class="t-num" id="cnt-v1q0-tech-pending">—</div>
-        <div class="t-pct" id="pct-v1q0-tech-pending">—</div>
-      </div>
-    </div>
-    <div class="timings">
-      <span class="t-step"><span class="t-step-name">⏱ Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v1q0-tech-avg">—</strong> · P95 <strong class="p95" id="t-v1q0-tech-p95">—</strong></span></span>
-    </div>
-  </div>
-
-  <!-- SEG 3: v2 QC Off -->
-  <div class="seg">
-    <div class="seg-hdr">
-      <span class="seg-badge b-v2no"><span class="dot"></span>v2 · QC Off</span>
-      <span class="seg-title">v2 — QC disabled</span>
-      <span class="seg-flow">processedAt → ai_sku_created_on → done_time</span>
-      <span class="seg-total">Total: <strong id="seg-v2q0-total">—</strong></span>
-      <span class="seg-ent">Enterprises: <strong id="ent-v2q0">—</strong></span>
-      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
-    </div>
-    <div class="states">
-      <div class="state-tile tile-delivered">
-        <div class="t-label">Delivered</div>
-        <div class="t-num" id="cnt-v2q0-delivered">—</div>
-        <div class="t-pct" id="pct-v2q0-delivered">—</div>
-      </div>
-      <div class="state-tile tile-tech">
-        <div class="t-label">Tech Processing Pending</div>
-        <div class="t-num" id="cnt-v2q0-tech-pending">—</div>
-        <div class="t-pct" id="pct-v2q0-tech-pending">—</div>
-      </div>
-    </div>
-    <div class="timings">
-      <span class="t-step"><span class="t-step-name">⏱ Pre-processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2q0-pre-avg">—</strong> · P95 <strong class="p95" id="t-v2q0-pre-p95">—</strong></span></span>
-      <span class="t-step-sep">→</span>
-      <span class="t-step"><span class="t-step-name">Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2q0-tech-avg">—</strong> · P95 <strong class="p95" id="t-v2q0-tech-p95">—</strong></span></span>
-    </div>
-  </div>
-
-  <!-- SEG 4: v2 QC On + Publishing -->
-  <div class="seg">
-    <div class="seg-hdr">
-      <span class="seg-badge b-v2pub"><span class="dot"></span>v2 · QC On · Publishing</span>
-      <span class="seg-title">v2 — QC + Publishing enabled</span>
-      <span class="seg-flow">processedAt → ai_sku_created_on → done_time → qc_done_time → firstPushedAt</span>
-      <span class="seg-total">Total: <strong id="seg-v2pub1-total">—</strong></span>
-      <span class="seg-ent">Enterprises: <strong id="ent-v2pub1">—</strong></span>
-      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
-    </div>
-    <div class="states">
-      <div class="state-tile tile-delivered">
-        <div class="t-label">Delivered</div>
-        <div class="t-num" id="cnt-v2pub1-delivered">—</div>
-        <div class="t-pct" id="pct-v2pub1-delivered">—</div>
-      </div>
-      <div class="state-tile tile-pubpend">
-        <div class="t-label">Publishing Pending</div>
-        <div class="t-num" id="cnt-v2pub1-pub-pending">—</div>
-        <div class="t-pct" id="pct-v2pub1-pub-pending">—</div>
-      </div>
-      <div class="state-tile tile-tobepushed">
-        <div class="t-label">To Be Pushed</div>
-        <div class="t-num" id="cnt-v2pub1-to-push">—</div>
-        <div class="t-pct" id="pct-v2pub1-to-push">≤4h after QC</div>
-      </div>
-      <div class="state-tile tile-qc">
-        <div class="t-label">QC Pending</div>
-        <div class="t-num" id="cnt-v2pub1-qc-pending">—</div>
-        <div class="t-pct" id="pct-v2pub1-qc-pending">—</div>
-      </div>
-      <div class="state-tile tile-tech">
-        <div class="t-label">Tech Processing Pending</div>
-        <div class="t-num" id="cnt-v2pub1-tech-pending">—</div>
-        <div class="t-pct" id="pct-v2pub1-tech-pending">—</div>
-      </div>
-    </div>
-    <div class="timings">
-      <span class="t-step"><span class="t-step-name">⏱ Pre-processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub1-pre-avg">—</strong> · P95 <strong class="p95" id="t-v2pub1-pre-p95">—</strong></span></span>
-      <span class="t-step-sep">→</span>
-      <span class="t-step"><span class="t-step-name">Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub1-tech-avg">—</strong> · P95 <strong class="p95" id="t-v2pub1-tech-p95">—</strong></span></span>
-      <span class="t-step-sep">→</span>
-      <span class="t-step"><span class="t-step-name">QC Review</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub1-qc-avg">—</strong> · P95 <strong class="p95" id="t-v2pub1-qc-p95">—</strong></span></span>
-      <span class="t-step-sep">→</span>
-      <span class="t-step"><span class="t-step-name">Publishing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub1-push-avg">—</strong> · P95 <strong class="p95" id="t-v2pub1-push-p95">—</strong></span></span>
-    </div>
-  </div>
-
-  <!-- SEG 5: v2 QC On, No Publishing -->
-  <div class="seg">
-    <div class="seg-hdr">
-      <span class="seg-badge b-v2nopub"><span class="dot"></span>v2 · QC On · No Publishing</span>
-      <span class="seg-title">v2 — QC enabled, Publishing disabled</span>
-      <span class="seg-flow">processedAt → ai_sku_created_on → done_time → qc_done_time</span>
-      <span class="seg-total">Total: <strong id="seg-v2pub0-total">—</strong></span>
-      <span class="seg-ent">Enterprises: <strong id="ent-v2pub0">—</strong></span>
-      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
-    </div>
-    <div class="states">
-      <div class="state-tile tile-delivered">
-        <div class="t-label">Delivered</div>
-        <div class="t-num" id="cnt-v2pub0-delivered">—</div>
-        <div class="t-pct" id="pct-v2pub0-delivered">—</div>
-      </div>
-      <div class="state-tile tile-notdel">
-        <div class="t-label">Not Delivered</div>
-        <div class="t-num" id="cnt-v2pub0-not-delivered">—</div>
-        <div class="t-pct" id="pct-v2pub0-not-delivered">—</div>
-      </div>
-      <div class="state-tile tile-tech">
-        <div class="t-label">Tech Processing Pending</div>
-        <div class="t-num" id="cnt-v2pub0-tech-pending">—</div>
-        <div class="t-pct" id="pct-v2pub0-tech-pending">—</div>
-      </div>
-    </div>
-    <div class="timings">
-      <span class="t-step"><span class="t-step-name">⏱ Pre-processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub0-pre-avg">—</strong> · P95 <strong class="p95" id="t-v2pub0-pre-p95">—</strong></span></span>
-      <span class="t-step-sep">→</span>
-      <span class="t-step"><span class="t-step-name">Tech Processing</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub0-tech-avg">—</strong> · P95 <strong class="p95" id="t-v2pub0-tech-p95">—</strong></span></span>
-      <span class="t-step-sep">→</span>
-      <span class="t-step"><span class="t-step-name">QC Review</span>&nbsp;<span class="t-step-vals">avg <strong id="t-v2pub0-qc-avg">—</strong> · P95 <strong class="p95" id="t-v2pub0-qc-p95">—</strong></span></span>
-    </div>
-  </div>
-
-</div><!-- /journey -->
-
-<!-- ══ STATUS DISTRIBUTION PAGE ══ -->
-<div class="page" id="page-status">
-  <div class="dist-card">
-    <div class="dist-hdr">SKU Status Distribution — is_360 = 0</div>
-    <table class="dist-table">
-      <thead><tr><th>Status</th><th class="dist-count">Count</th><th style="width:260px">Share</th><th class="dist-pct">%</th></tr></thead>
-      <tbody>
-        <tr><td><span class="status-badge" style="background:#f0fdf4;color:#16a34a">Done</span></td><td class="dist-count">1,109,282</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:100%;background:#16a34a"></div></div></td><td class="dist-pct">99.9%</td></tr>
-        <tr><td><span class="status-badge" style="background:#fffbeb;color:#d97706">Yet to Start</span></td><td class="dist-count">811</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.07%;background:#d97706"></div></div></td><td class="dist-pct">0.07%</td></tr>
-        <tr><td><span class="status-badge" style="background:#eff6ff;color:#2563eb">In Progress</span></td><td class="dist-count">295</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.03%;background:#2563eb"></div></div></td><td class="dist-pct">0.03%</td></tr>
-        <tr><td><span class="status-badge" style="background:#f5f5f5;color:#6b7280">Draft</span></td><td class="dist-count">118</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.01%;background:#6b7280"></div></div></td><td class="dist-pct">0.01%</td></tr>
-        <tr><td><span class="status-badge" style="background:#fef2f2;color:#dc2626">InsufficientAssets</span></td><td class="dist-count">56</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.005%;background:#dc2626"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
-        <tr><td><span class="status-badge" style="background:#f5f3ff;color:#7c3aed">yet_to_upload</span></td><td class="dist-count">10</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.001%;background:#7c3aed"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <div class="dist-card">
-    <div class="dist-hdr">CRM Status Distribution — is_360 = 0</div>
-    <table class="dist-table">
-      <thead><tr><th>CRM Status</th><th class="dist-count">Count</th><th style="width:260px">Share</th><th class="dist-pct">%</th></tr></thead>
-      <tbody>
-        <tr><td><span class="status-badge" style="background:#f0fdf4;color:#16a34a">qc_done</span></td><td class="dist-count">1,085,042</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:100%;background:#16a34a"></div></div></td><td class="dist-pct">97.7%</td></tr>
-        <tr><td><span class="status-badge" style="background:#eff6ff;color:#2563eb">qc_unassigned</span></td><td class="dist-count">23,742</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:2.19%;background:#2563eb"></div></div></td><td class="dist-pct">2.14%</td></tr>
-        <tr><td><span class="status-badge" style="background:#fff7ed;color:#ea580c">qc_inprogress</span></td><td class="dist-count">173</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.02%;background:#ea580c"></div></div></td><td class="dist-pct">0.02%</td></tr>
-        <tr><td><span class="status-badge" style="background:#fef2f2;color:#dc2626">qc_onhold</span></td><td class="dist-count">142</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.013%;background:#dc2626"></div></div></td><td class="dist-pct">0.01%</td></tr>
-        <tr><td><span class="status-badge" style="background:#f5f5f5;color:#6b7280">(null)</span></td><td class="dist-count">100</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.009%;background:#6b7280"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
-        <tr><td><span class="status-badge" style="background:#f5f3ff;color:#7c3aed">enterprise_done</span></td><td class="dist-count">19</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.002%;background:#7c3aed"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
-        <tr><td><span class="status-badge" style="background:#f0fdf4;color:#059669">editing_unassigned</span></td><td class="dist-count">10</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.001%;background:#059669"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
-        <tr><td><span class="status-badge" style="background:#fffbeb;color:#d97706">editing_started</span></td><td class="dist-count">4</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.0%;background:#d97706"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
-
-</div><!-- /main -->
-
-<script>
-// ── TABS ──────────────────────────────────────────────────────────────────────
-function showPage(name, el) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  el.classList.add('active');
+if (!API_KEY) {
+  console.error('ERROR: MB_API_KEY environment variable is not set.');
+  process.exit(1);
 }
 
-// ── HELPERS ───────────────────────────────────────────────────────────────────
-const n = v => (v ?? 0).toLocaleString();
-const pct = (part, total) => total > 0 ? ((part / total) * 100).toFixed(2) + '%' : '—';
+// ── COUNT QUERIES ─────────────────────────────────────────────────────────────
+// Pattern: SELECT count() FROM {{#12816}} AS b WHERE <where>
+const COUNT_QUERIES = [
+  ['v1_qc1_delivered',      `version='v1' AND is_qc_on=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
+  ['v1_qc1_qc_pending',     `version='v1' AND is_qc_on=1 AND done_time IS NOT NULL AND qc_done_time IS NULL`],
+  ['v1_qc1_tech_pending',   `version='v1' AND is_qc_on=1 AND done_time IS NULL`],
+  ['v1_qc0_delivered',      `version='v1' AND is_qc_on=0 AND done_time IS NOT NULL`],
+  ['v1_qc0_tech_pending',   `version='v1' AND is_qc_on=0 AND done_time IS NULL`],
+  ['v2_qc0_delivered',      `version='v2' AND is_qc_on=0 AND done_time IS NOT NULL`],
+  ['v2_qc0_tech_pending',   `version='v2' AND is_qc_on=0 AND done_time IS NULL`],
+  ['v2_pub1_delivered',     `version='v2' AND is_qc_on=1 AND is_publishing=1 AND firstPushedAt IS NOT NULL`],
+  ['v2_pub1_pub_pending',   `version='v2' AND is_qc_on=1 AND is_publishing=1 AND firstPushedAt IS NULL AND qc_done_time IS NOT NULL AND (now() - toDateTime(qc_done_time)) > 14400`],
+  ['v2_pub1_to_push',       `version='v2' AND is_qc_on=1 AND is_publishing=1 AND firstPushedAt IS NULL AND qc_done_time IS NOT NULL AND (now() - toDateTime(qc_done_time)) <= 14400`],
+  ['v2_pub1_qc_pending',    `version='v2' AND is_qc_on=1 AND is_publishing=1 AND qc_done_time IS NULL AND done_time IS NOT NULL`],
+  ['v2_pub1_tech_pending',  `version='v2' AND is_qc_on=1 AND is_publishing=1 AND done_time IS NULL`],
+  ['v2_pub0_delivered',     `version='v2' AND is_qc_on=1 AND is_publishing=0 AND qc_done_time IS NOT NULL`],
+  ['v2_pub0_not_delivered', `version='v2' AND is_qc_on=1 AND is_publishing=0 AND qc_done_time IS NULL AND done_time IS NOT NULL`],
+  ['v2_pub0_tech_pending',  `version='v2' AND is_qc_on=1 AND is_publishing=0 AND done_time IS NULL`],
+];
 
-function set(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val;
+// ── SCALAR QUERIES ────────────────────────────────────────────────────────────
+// Pattern: full SQL returning a single scalar value.
+// Each query runs individually (no UNION ALL — avoids ClickHouse memory limits).
+const C = `{{#${BASE_CARD}}} AS b`;  // shorthand alias
+
+const SCALAR_QUERIES = [
+  // ── Enterprise counts (uniq per segment) ──
+  ['v1_qc1_ent_count',     `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v1' AND is_qc_on=1`],
+  ['v1_qc0_ent_count',     `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v1' AND is_qc_on=0`],
+  ['v2_qc0_ent_count',     `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v2' AND is_qc_on=0`],
+  ['v2_pub1_ent_count',    `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1`],
+  ['v2_pub0_ent_count',    `SELECT uniq(enterprise_name) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0`],
+
+  // ── v1 · QC On — tech processing (ai_sku_created_on → done_time) ──
+  ['v1_qc1_tech_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=1 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  ['v1_qc1_tech_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=1 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  // ── v1 · QC On — QC review (done_time → qc_done_time) ──
+  ['v1_qc1_qc_avg_min',    `SELECT round(avg(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
+  ['v1_qc1_qc_p95_min',    `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
+
+  // ── v1 · QC Off — tech processing (ai_sku_created_on → done_time) ──
+  ['v1_qc0_tech_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  ['v1_qc0_tech_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v1' AND is_qc_on=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+
+  // ── v2 · QC Off — pre-processing (processedAt → ai_sku_created_on) ──
+  ['v2_qc0_pre_avg_min',   `SELECT round(avg(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=0 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
+  ['v2_qc0_pre_p95_min',   `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=0 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
+  // ── v2 · QC Off — tech processing (ai_sku_created_on → done_time) ──
+  ['v2_qc0_tech_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  ['v2_qc0_tech_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+
+  // ── v2 · QC On · Publishing — pre-processing ──
+  ['v2_pub1_pre_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
+  ['v2_pub1_pre_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
+  // ── v2 · QC On · Publishing — tech processing ──
+  ['v2_pub1_tech_avg_min', `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  ['v2_pub1_tech_p95_min', `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  // ── v2 · QC On · Publishing — QC review ──
+  ['v2_pub1_qc_avg_min',   `SELECT round(avg(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
+  ['v2_pub1_qc_p95_min',   `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
+  // ── v2 · QC On · Publishing — publishing (qc_done_time → firstPushedAt) ──
+  ['v2_pub1_push_avg_min', `SELECT round(avg(dateDiff('minute', toDateTime(qc_done_time), toDateTime(firstPushedAt)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND qc_done_time IS NOT NULL AND firstPushedAt IS NOT NULL`],
+  ['v2_pub1_push_p95_min', `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(qc_done_time), toDateTime(firstPushedAt)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=1 AND qc_done_time IS NOT NULL AND firstPushedAt IS NOT NULL`],
+
+  // ── v2 · QC On · No Publishing — pre-processing ──
+  ['v2_pub0_pre_avg_min',  `SELECT round(avg(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
+  ['v2_pub0_pre_p95_min',  `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(processedAt), toDateTime(ai_sku_created_on)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND processedAt IS NOT NULL AND ai_sku_created_on IS NOT NULL`],
+  // ── v2 · QC On · No Publishing — tech processing ──
+  ['v2_pub0_tech_avg_min', `SELECT round(avg(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  ['v2_pub0_tech_p95_min', `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(ai_sku_created_on), toDateTime(done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND ai_sku_created_on IS NOT NULL AND done_time IS NOT NULL`],
+  // ── v2 · QC On · No Publishing — QC review ──
+  ['v2_pub0_qc_avg_min',   `SELECT round(avg(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
+  ['v2_pub0_qc_p95_min',   `SELECT round(quantile(0.95)(dateDiff('minute', toDateTime(done_time), toDateTime(qc_done_time)))) FROM ${C} WHERE version='v2' AND is_qc_on=1 AND is_publishing=0 AND done_time IS NOT NULL AND qc_done_time IS NOT NULL`],
+];
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ── Metabase API helper ───────────────────────────────────────────────────────
+// Runs any SQL that references {{#BASE_CARD}} and returns rows[0][0] as Number.
+function mbQuery(sql, retries = 3) {
+  const body = JSON.stringify({
+    database: 350,
+    type: 'native',
+    native: {
+      query: sql,
+      template_tags: {
+        [`#${BASE_CARD}`]: {
+          id: `card-${BASE_CARD}`, name: `#${BASE_CARD}`,
+          display_name: `Card ${BASE_CARD}`, type: 'card', card_id: BASE_CARD,
+        }
+      }
+    }
+  });
+
+  return new Promise((resolve, reject) => {
+    const attempt = (n) => {
+      const req = https.request({
+        hostname: MB_HOST, path: '/api/dataset', method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+          'x-api-key': API_KEY,
+        },
+        timeout: 120_000,
+      }, res => {
+        let raw = '';
+        res.on('data', c => raw += c);
+        res.on('end', () => {
+          try {
+            const data = JSON.parse(raw);
+            if (data.error) {
+              if (n > 1 && data.error.includes('MEMORY_LIMIT')) {
+                console.warn(`  Memory limit, retrying in 10s… (${n-1} left)`);
+                return sleep(10_000).then(() => attempt(n - 1));
+              }
+              return reject(new Error(data.error));
+            }
+            const val = data?.data?.rows?.[0]?.[0];
+            resolve(val === null || val === undefined ? null : Number(val));
+          } catch (e) { reject(new Error(`Parse error: ${e.message}`)); }
+        });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('Timeout after 120s')); });
+      req.write(body);
+      req.end();
+    };
+    attempt(retries);
+  });
 }
 
-// ── POPULATE FROM COUNTS ──────────────────────────────────────────────────────
-function populate(d) {
-  // Segment totals
-  const v1q1 = (d.v1_qc1_delivered||0) + (d.v1_qc1_qc_pending||0) + (d.v1_qc1_tech_pending||0);
-  const v1q0 = (d.v1_qc0_delivered||0) + (d.v1_qc0_tech_pending||0);
-  const v2q0 = (d.v2_qc0_delivered||0) + (d.v2_qc0_tech_pending||0);
-  const v2p1 = (d.v2_pub1_delivered||0) + (d.v2_pub1_pub_pending||0) + (d.v2_pub1_to_push||0)
-             + (d.v2_pub1_qc_pending||0) + (d.v2_pub1_tech_pending||0);
-  const v2p0 = (d.v2_pub0_delivered||0) + (d.v2_pub0_not_delivered||0) + (d.v2_pub0_tech_pending||0);
-  const grand = v1q1 + v1q0 + v2q0 + v2p1 + v2p0;
+// ── MAIN ─────────────────────────────────────────────────────────────────────
+(async () => {
+  const total = COUNT_QUERIES.length + SCALAR_QUERIES.length;
+  console.log(`[${new Date().toISOString()}] Running ${total} queries (${COUNT_QUERIES.length} counts + ${SCALAR_QUERIES.length} scalars)…`);
 
-  // Sumbar
-  set('sum-total',  n(grand));
-  set('sum-v1q1',   n(v1q1));
-  set('sum-v1q0',   n(v1q0));
-  set('sum-v2q0',   n(v2q0));
-  set('sum-v2pub1', n(v2p1));
-  set('sum-v2pub0', n(v2p0));
-
-  // Segment totals in headers
-  set('seg-v1q1-total',  n(v1q1));
-  set('seg-v1q0-total',  n(v1q0));
-  set('seg-v2q0-total',  n(v2q0));
-  set('seg-v2pub1-total',n(v2p1));
-  set('seg-v2pub0-total',n(v2p0));
-
-  // ── Seg 1: v1 QC On ──
-  set('cnt-v1q1-delivered',    n(d.v1_qc1_delivered));
-  set('cnt-v1q1-qc-pending',   n(d.v1_qc1_qc_pending));
-  set('cnt-v1q1-tech-pending', n(d.v1_qc1_tech_pending));
-  set('pct-v1q1-delivered',    pct(d.v1_qc1_delivered,   v1q1));
-  set('pct-v1q1-qc-pending',   pct(d.v1_qc1_qc_pending,  v1q1));
-  set('pct-v1q1-tech-pending', pct(d.v1_qc1_tech_pending, v1q1));
-
-  // ── Seg 2: v1 QC Off ──
-  set('cnt-v1q0-delivered',    n(d.v1_qc0_delivered));
-  set('cnt-v1q0-tech-pending', n(d.v1_qc0_tech_pending));
-  set('pct-v1q0-delivered',    pct(d.v1_qc0_delivered,    v1q0));
-  set('pct-v1q0-tech-pending', pct(d.v1_qc0_tech_pending, v1q0));
-
-  // ── Seg 3: v2 QC Off ──
-  set('cnt-v2q0-delivered',    n(d.v2_qc0_delivered));
-  set('cnt-v2q0-tech-pending', n(d.v2_qc0_tech_pending));
-  set('pct-v2q0-delivered',    pct(d.v2_qc0_delivered,    v2q0));
-  set('pct-v2q0-tech-pending', pct(d.v2_qc0_tech_pending, v2q0));
-
-  // ── Seg 4: v2 QC On · Publishing ──
-  set('cnt-v2pub1-delivered',    n(d.v2_pub1_delivered));
-  set('cnt-v2pub1-pub-pending',  n(d.v2_pub1_pub_pending));
-  set('cnt-v2pub1-to-push',      n(d.v2_pub1_to_push));
-  set('cnt-v2pub1-qc-pending',   n(d.v2_pub1_qc_pending));
-  set('cnt-v2pub1-tech-pending', n(d.v2_pub1_tech_pending));
-  set('pct-v2pub1-delivered',    pct(d.v2_pub1_delivered,    v2p1));
-  set('pct-v2pub1-pub-pending',  pct(d.v2_pub1_pub_pending,  v2p1) + ' · >4h wait');
-  set('pct-v2pub1-qc-pending',   pct(d.v2_pub1_qc_pending,   v2p1));
-  set('pct-v2pub1-tech-pending', pct(d.v2_pub1_tech_pending,  v2p1));
-
-  // ── Seg 5: v2 QC On · No Publishing ──
-  set('cnt-v2pub0-delivered',     n(d.v2_pub0_delivered));
-  set('cnt-v2pub0-not-delivered', n(d.v2_pub0_not_delivered));
-  set('cnt-v2pub0-tech-pending',  n(d.v2_pub0_tech_pending));
-  set('pct-v2pub0-delivered',     pct(d.v2_pub0_delivered,     v2p0));
-  set('pct-v2pub0-not-delivered', pct(d.v2_pub0_not_delivered,  v2p0));
-  set('pct-v2pub0-tech-pending',  pct(d.v2_pub0_tech_pending,   v2p0));
-
-  // ── Enterprise counts ──
-  const entFmt = v => (v != null ? n(v) : '—');
-  set('ent-v1q1',   entFmt(d.v1_qc1_ent_count));
-  set('ent-v1q0',   entFmt(d.v1_qc0_ent_count));
-  set('ent-v2q0',   entFmt(d.v2_qc0_ent_count));
-  set('ent-v2pub1', entFmt(d.v2_pub1_ent_count));
-  set('ent-v2pub0', entFmt(d.v2_pub0_ent_count));
-
-  // ── Timing (avg / P95 in minutes → human-readable) ──
-  const fd = fmtDuration;
-  // Seg 1
-  set('t-v1q1-tech-avg',   fd(d.v1_qc1_tech_avg_min));
-  set('t-v1q1-tech-p95',   fd(d.v1_qc1_tech_p95_min));
-  set('t-v1q1-qc-avg',     fd(d.v1_qc1_qc_avg_min));
-  set('t-v1q1-qc-p95',     fd(d.v1_qc1_qc_p95_min));
-  // Seg 2
-  set('t-v1q0-tech-avg',   fd(d.v1_qc0_tech_avg_min));
-  set('t-v1q0-tech-p95',   fd(d.v1_qc0_tech_p95_min));
-  // Seg 3
-  set('t-v2q0-pre-avg',    fd(d.v2_qc0_pre_avg_min));
-  set('t-v2q0-pre-p95',    fd(d.v2_qc0_pre_p95_min));
-  set('t-v2q0-tech-avg',   fd(d.v2_qc0_tech_avg_min));
-  set('t-v2q0-tech-p95',   fd(d.v2_qc0_tech_p95_min));
-  // Seg 4
-  set('t-v2pub1-pre-avg',  fd(d.v2_pub1_pre_avg_min));
-  set('t-v2pub1-pre-p95',  fd(d.v2_pub1_pre_p95_min));
-  set('t-v2pub1-tech-avg', fd(d.v2_pub1_tech_avg_min));
-  set('t-v2pub1-tech-p95', fd(d.v2_pub1_tech_p95_min));
-  set('t-v2pub1-qc-avg',   fd(d.v2_pub1_qc_avg_min));
-  set('t-v2pub1-qc-p95',   fd(d.v2_pub1_qc_p95_min));
-  set('t-v2pub1-push-avg', fd(d.v2_pub1_push_avg_min));
-  set('t-v2pub1-push-p95', fd(d.v2_pub1_push_p95_min));
-  // Seg 5
-  set('t-v2pub0-pre-avg',  fd(d.v2_pub0_pre_avg_min));
-  set('t-v2pub0-pre-p95',  fd(d.v2_pub0_pre_p95_min));
-  set('t-v2pub0-tech-avg', fd(d.v2_pub0_tech_avg_min));
-  set('t-v2pub0-tech-p95', fd(d.v2_pub0_tech_p95_min));
-  set('t-v2pub0-qc-avg',   fd(d.v2_pub0_qc_avg_min));
-  set('t-v2pub0-qc-p95',   fd(d.v2_pub0_qc_p95_min));
-}
-
-// ── DURATION FORMATTER ────────────────────────────────────────────────────────
-function fmtDuration(mins) {
-  if (mins == null) return '—';
-  const m = Math.round(mins);
-  if (m < 60)   return `${m}m`;
-  const h = Math.floor(m / 60), rm = m % 60;
-  if (m < 1440) return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
-  const d = Math.floor(m / 1440), rh = Math.floor((m % 1440) / 60);
-  return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
-}
-
-// ── "LAST UPDATED" BADGE ──────────────────────────────────────────────────────
-function fmtAge(isoStr) {
-  const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
-  if (diff < 60)  return 'Updated just now';
-  if (diff < 3600) return `Updated ${Math.floor(diff/60)}m ago`;
-  if (diff < 86400) return `Updated ${Math.floor(diff/3600)}h ago`;
-  return `Updated ${Math.floor(diff/86400)}d ago`;
-}
-
-// ── SEED DATA (last-known counts — shown instantly, overwritten by live JSON) ──
-const SEED = {
-  updated_at: "2026-07-30T13:01:47Z",
-  v1_qc1_delivered: 540093, v1_qc1_qc_pending: 23849, v1_qc1_tech_pending: 395,
-  v1_qc0_delivered: 297013, v1_qc0_tech_pending: 239,
-  v2_qc0_delivered: 159725, v2_qc0_tech_pending: 333,
-  v2_pub1_delivered: 76223, v2_pub1_pub_pending: 991, v2_pub1_to_push: 91,
-  v2_pub1_qc_pending: 166,  v2_pub1_tech_pending: 7,
-  v2_pub0_delivered: 11445, v2_pub0_not_delivered: 47, v2_pub0_tech_pending: 4
-};
-
-// ── LOAD DATA ─────────────────────────────────────────────────────────────────
-let _lastUpdated = null;
-
-async function fetchCounts() {
-  const resp = await fetch(`./data/counts.json?t=${Date.now()}`);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const d = await resp.json();
-  // Replace any nulls with seed fallback so dashboard never goes blank
-  for (const key of Object.keys(SEED)) {
-    if (key === 'updated_at') continue;
-    if (d[key] === null || d[key] === undefined) d[key] = SEED[key];
-  }
-  return d;
-}
-
-// Called on page load — silent, no timer
-async function loadData() {
-  const btn = document.getElementById('refreshBtn');
-  populate(SEED);
-  _lastUpdated = SEED.updated_at;
-  set('updatedBadge', fmtAge(SEED.updated_at));
-  document.getElementById('loadOverlay').classList.add('done');
+  // Load existing data to preserve values on query failure
+  let existing = {};
   try {
-    const d = await fetchCounts();
-    populate(d);
-    _lastUpdated = d.updated_at;
-    set('updatedBadge', fmtAge(d.updated_at));
-    document.getElementById('errBanner').style.display = 'none';
-  } catch (err) {
-    showWarning(`Showing cached data. Live counts unavailable: ${err.message}`);
+    existing = JSON.parse(fs.readFileSync(OUT_FILE, 'utf8'));
+    console.log('Loaded existing counts.json — will preserve values on failure.');
+  } catch {
+    console.log('No existing counts.json — starting fresh.');
   }
-  if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
-}
 
-// Called on button click — shows live elapsed timer
-async function handleRefresh() {
-  const btn = document.getElementById('refreshBtn');
-  if (btn.disabled) return;
+  const counts = { updated_at: new Date().toISOString() };
+  let failures = 0;
 
-  const start = Date.now();
-  btn.disabled = true;
-
-  // Live timer updates every 100ms
-  const timer = setInterval(() => {
-    btn.textContent = `⏳ ${((Date.now() - start) / 1000).toFixed(1)}s`;
-  }, 100);
-
-  try {
-    const d = await fetchCounts();
-    populate(d);
-    _lastUpdated = d.updated_at;
-    set('updatedBadge', fmtAge(d.updated_at));
-    document.getElementById('errBanner').style.display = 'none';
-
-    // Show "Done Xs" for 2s then reset
-    clearInterval(timer);
-    btn.textContent = `✓ Done ${((Date.now() - start) / 1000).toFixed(1)}s`;
-    setTimeout(() => { btn.textContent = '↻ Refresh'; btn.disabled = false; }, 2000);
-  } catch (err) {
-    clearInterval(timer);
-    showWarning(`Showing cached data. Live counts unavailable: ${err.message}`);
-    btn.textContent = '↻ Refresh';
-    btn.disabled = false;
+  // ── Phase 1: count queries ──────────────────────────────────────────────────
+  console.log(`\n[Phase 1] Count queries…`);
+  for (const [metric, where] of COUNT_QUERIES) {
+    process.stdout.write(`  ${metric}… `);
+    try {
+      const val = await mbQuery(`SELECT count() FROM ${C} WHERE ${where}`);
+      counts[metric] = val;
+      console.log((val ?? 0).toLocaleString());
+    } catch (err) {
+      failures++;
+      counts[metric] = existing[metric] ?? null;
+      console.error(`FAILED (kept: ${counts[metric]}) — ${err.message.slice(0, 100)}`);
+    }
+    await sleep(2_000);
   }
-}
 
-function showWarning(msg) {
-  const banner = document.getElementById('errBanner');
-  banner.style.cssText = 'display:block;background:#fffbeb;border-bottom:2px solid #fde68a;padding:10px 32px;font-size:13px;color:#92400e;';
-  banner.textContent = `⚠ ${msg}`;
-}
+  // Only advance updated_at if at least one count succeeded
+  if (failures === COUNT_QUERIES.length) {
+    counts.updated_at = existing.updated_at ?? counts.updated_at;
+    console.warn('All count queries failed — preserving previous timestamp.');
+  }
 
-// Refresh "X minutes ago" badge every minute
-setInterval(() => { if (_lastUpdated) set('updatedBadge', fmtAge(_lastUpdated)); }, 60_000);
+  // ── Phase 2: scalar queries (enterprise counts + timing) ───────────────────
+  console.log(`\n[Phase 2] Scalar queries (enterprise counts + avg/P95 timing)…`);
+  let scalarFailures = 0;
 
-// Refresh the "X minutes ago" badge every minute without re-fetching
-setInterval(() => {
-  if (_lastUpdated) set('updatedBadge', fmtAge(_lastUpdated));
-}, 60_000);
+  for (const [metric, sql] of SCALAR_QUERIES) {
+    process.stdout.write(`  ${metric}… `);
+    try {
+      const val = await mbQuery(sql);
+      counts[metric] = val;
+      console.log(val ?? '—');
+    } catch (err) {
+      scalarFailures++;
+      counts[metric] = existing[metric] ?? null;
+      console.error(`FAILED (kept: ${counts[metric]}) — ${err.message.slice(0, 100)}`);
+    }
+    await sleep(2_000);
+  }
 
-// Initial load
-loadData();
-</script>
-</body>
-</html>
+  const ok1 = COUNT_QUERIES.length - failures;
+  const ok2 = SCALAR_QUERIES.length - scalarFailures;
+  console.log(`\nDone. Counts: ${ok1}/${COUNT_QUERIES.length} · Scalars: ${ok2}/${SCALAR_QUERIES.length}`);
+
+  fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
+  fs.writeFileSync(OUT_FILE, JSON.stringify(counts, null, 2));
+  console.log(`Written → ${OUT_FILE}`);
+})();
