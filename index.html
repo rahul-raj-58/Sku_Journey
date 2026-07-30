@@ -567,77 +567,22 @@ async function loadData() {
   if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
 }
 
-// Called on button click — triggers live GitHub Actions run, then reads fresh data
+// Called on button click — reads latest counts.json (Actions auto-runs every 5 min)
 async function handleRefresh() {
   const btn = document.getElementById('refreshBtn');
   if (btn.disabled) return;
   btn.disabled = true;
-  const start = Date.now();
-  const elapsed = () => ((Date.now() - start) / 1000).toFixed(1);
-
-  const timer = setInterval(() => {
-    btn.textContent = `⏳ ${elapsed()}s`;
-  }, 100);
+  btn.textContent = '⏳ Loading…';
 
   try {
-    if (GH_TOKEN) {
-      // ── Phase 1: dispatch workflow ──────────────────────────────────────────
-      clearInterval(timer);
-      btn.textContent = '⏳ Triggering…';
-      const dispatchResp = await fetch(
-        `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/refresh-data.yml/dispatches`,
-        { method: 'POST',
-          headers: { Authorization: `Bearer ${GH_TOKEN}`, 'Content-Type': 'application/json', Accept: 'application/vnd.github+json' },
-          body: JSON.stringify({ ref: GH_BRANCH }) }
-      );
-      if (!dispatchResp.ok) {
-        const msg = await dispatchResp.text();
-        throw new Error(`GitHub dispatch ${dispatchResp.status}: ${msg.slice(0,120)}`);
-      }
-
-      // ── Phase 2: wait for GitHub to register the run (~5s) ─────────────────
-      await new Promise(r => setTimeout(r, 6000));
-
-      // ── Phase 3: poll until run completes ──────────────────────────────────
-      const runTimer = setInterval(() => {
-        btn.textContent = `⏳ Running ${elapsed()}s`;
-      }, 500);
-
-      let done = false;
-      for (let i = 0; i < 72; i++) {  // max ~6 min
-        await new Promise(r => setTimeout(r, 5000));
-        try {
-          const runsResp = await fetch(
-            `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/actions/runs?per_page=3&event=workflow_dispatch`,
-            { headers: { Authorization: `Bearer ${GH_TOKEN}`, Accept: 'application/vnd.github+json' } }
-          );
-          const data = await runsResp.json();
-          const run = (data.workflow_runs || []).find(r => r.status !== 'completed') ||
-                      (data.workflow_runs || [])[0];
-          if (run && run.status === 'completed') { done = true; break; }
-        } catch { /* keep polling on transient errors */ }
-      }
-      clearInterval(runTimer);
-      if (!done) throw new Error('Workflow timed out after 6 minutes');
-
-      // ── Phase 4: small pause so GitHub Pages CDN picks up the new counts.json
-      await new Promise(r => setTimeout(r, 3000));
-    }
-
-    // ── Read the (now-updated) counts.json ─────────────────────────────────
     const d = await fetchCounts();
     populate(d);
     _lastUpdated = d.updated_at;
     set('updatedBadge', fmtAge(d.updated_at));
     document.getElementById('errBanner').style.display = 'none';
-
-    clearInterval(timer);
-    const mode = GH_TOKEN ? '✓ Live' : '✓ Done';
-    btn.textContent = `${mode} ${elapsed()}s`;
-    setTimeout(() => { btn.textContent = '↻ Refresh'; btn.disabled = false; }, 3000);
-
+    btn.textContent = '✓ Done';
+    setTimeout(() => { btn.textContent = '↻ Refresh'; btn.disabled = false; }, 2000);
   } catch (err) {
-    clearInterval(timer);
     showWarning(`Refresh failed: ${err.message}`);
     btn.textContent = '↻ Refresh';
     btn.disabled = false;
@@ -650,8 +595,8 @@ function showWarning(msg) {
   banner.textContent = `⚠ ${msg}`;
 }
 
-// Update "X ago" badge every minute without re-fetching
-setInterval(() => { if (_lastUpdated) set('updatedBadge', fmtAge(_lastUpdated)); }, 60_000);
+// Update "X ago" badge every 10 seconds
+setInterval(() => { if (_lastUpdated) set('updatedBadge', fmtAge(_lastUpdated)); }, 10_000);
 
 // Show ⚡ Live chip if token is set
 if (GH_TOKEN) {
