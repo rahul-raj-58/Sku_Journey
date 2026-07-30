@@ -26,7 +26,7 @@ jobs:
 
       - name: Fetch counts from Metabase
         env:
-          MB_API_KEY: ${{ secrets.MB_API_KEY }}
+          MB_API_KEY: mb_BbbOBUMM+s1sUJTquApMnybzWwQtIjlpSmpnATkDyOc=
         run: node fetch_counts.js
 
       - name: Commit updated counts
