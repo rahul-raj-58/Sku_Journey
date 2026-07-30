@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SKU Journey Tracker</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f1f4f8;--card:#fff;--dark:#0d1117;--mid:#374151;--muted:#6b7280;--border:#e5e7eb;
+  --green:#16a34a;--green-bg:#f0fdf4;--green-light:#dcfce7;
+  --amber:#d97706;--amber-bg:#fffbeb;--amber-light:#fef3c7;
+  --red:#dc2626;--red-bg:#fef2f2;--red-light:#fee2e2;
+  --blue:#2563eb;--blue-bg:#eff6ff;--blue-light:#dbeafe;
+  --purple:#7c3aed;--purple-bg:#f5f3ff;--purple-light:#ede9fe;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--dark);min-height:100vh;}
+
+/* ── HEADER ── */
+.hdr{background:var(--dark);padding:16px 32px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+.hdr h1{color:#fff;font-size:17px;font-weight:700;}
+.hdr p{color:#8892b0;font-size:11px;margin-top:2px;}
+.hdr-right{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.chip{font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;letter-spacing:.3px;}
+.chip.live{background:#16a34a22;color:#4ade80;border:1px solid #16a34a44;}
+.chip.dark{background:rgba(255,255,255,.07);color:#c9d1e0;}
+.updated-badge{font-size:11px;color:#8892b0;white-space:nowrap;}
+#refreshBtn{padding:5px 12px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#c9d1e0;font-size:12px;cursor:pointer;transition:all .15s;}
+#refreshBtn:hover{background:rgba(255,255,255,.15);}
+
+/* ── LOADING OVERLAY ── */
+#loadOverlay{position:fixed;inset:0;background:rgba(13,17,23,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .3s;}
+#loadOverlay.done{opacity:0;pointer-events:none;}
+.load-spinner{width:36px;height:36px;border:3px solid rgba(255,255,255,.2);border-top-color:#60a5fa;border-radius:50%;animation:spin .7s linear infinite;}
+.load-text{color:#94a3b8;font-size:14px;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── ERROR BANNER ── */
+#errBanner{display:none;background:#fef2f2;border-bottom:2px solid #fecaca;padding:10px 32px;font-size:13px;color:#dc2626;}
+
+/* ── TABS ── */
+.tabs{background:#1a2332;display:flex;padding:0 32px;border-bottom:1px solid #263349;}
+.tab{padding:12px 20px;font-size:13px;font-weight:600;color:#8892b0;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;}
+.tab:hover{color:#c9d1e0;} .tab.active{color:#60a5fa;border-bottom-color:#60a5fa;}
+
+/* ── SUMBAR ── */
+.sumbar{background:#1e293b;display:flex;border-bottom:1px solid #263349;flex-wrap:wrap;}
+.sum-item{flex:1;min-width:160px;padding:12px 20px;border-right:1px solid #263349;}
+.sum-item:last-child{border-right:none;}
+.sl{color:#8892b0;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;}
+.sv{color:#fff;font-size:20px;font-weight:800;margin-top:2px;min-width:60px;}
+.ss{color:#94a3b8;font-size:11px;margin-top:1px;}
+
+/* ── MAIN ── */
+.main{max-width:1440px;margin:0 auto;padding:24px;}
+.page{display:none;} .page.active{display:block;}
+
+/* ── SEGMENT CARD ── */
+.seg{background:var(--card);border:1px solid var(--border);border-radius:14px;margin-bottom:20px;overflow:hidden;}
+.seg-hdr{display:flex;align-items:center;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.seg-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;border:1.5px solid currentColor;}
+.seg-badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor;}
+.b-v1qc{color:#2563eb;background:#2563eb0d;} .b-v1no{color:#7c3aed;background:#7c3aed0d;}
+.b-v2no{color:#0891b2;background:#0891b20d;} .b-v2pub{color:#059669;background:#0596690d;}
+.b-v2nopub{color:#d97706;background:#d977060d;}
+.seg-title{font-size:14px;font-weight:700;}
+.seg-flow{font-size:11px;color:var(--muted);font-family:monospace;background:var(--bg);padding:4px 10px;border-radius:6px;}
+.seg-total{font-size:13px;color:var(--muted);margin-left:auto;}
+.seg-total strong{font-size:18px;font-weight:800;color:var(--dark);}
+.seg-mb-link{font-size:11px;font-weight:600;color:var(--blue);text-decoration:none;white-space:nowrap;padding:4px 10px;border:1px solid var(--blue-light);border-radius:8px;background:var(--blue-bg);}
+.seg-mb-link:hover{background:#dbeafe;}
+
+/* ── STATE TILES ── */
+.states{display:flex;flex-wrap:wrap;}
+.state-tile{flex:1;min-width:150px;padding:18px 20px;border-right:1px solid var(--border);position:relative;overflow:hidden;}
+.state-tile:last-child{border-right:none;}
+.state-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent,#888);}
+.t-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:8px;}
+.t-num{font-size:32px;font-weight:900;line-height:1;letter-spacing:-1px;transition:all .3s;}
+.t-pct{font-size:11px;font-weight:600;margin-top:5px;padding:2px 7px;border-radius:8px;display:inline-block;}
+.t-skeleton{display:inline-block;background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 50%,#e5e7eb 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:6px;}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+.tile-delivered{--accent:var(--green)} .tile-delivered .t-num{color:var(--green)} .tile-delivered .t-pct{background:var(--green-light);color:var(--green);}
+.tile-tech{--accent:var(--amber)} .tile-tech .t-num{color:var(--amber)} .tile-tech .t-pct{background:var(--amber-light);color:var(--amber);}
+.tile-qc{--accent:var(--blue)} .tile-qc .t-num{color:var(--blue)} .tile-qc .t-pct{background:var(--blue-light);color:var(--blue);}
+.tile-pubpend{--accent:var(--red)} .tile-pubpend .t-num{color:var(--red)} .tile-pubpend .t-pct{background:var(--red-light);color:var(--red);}
+.tile-tobepushed{--accent:var(--purple)} .tile-tobepushed .t-num{color:var(--purple)} .tile-tobepushed .t-pct{background:var(--purple-light);color:var(--purple);}
+.tile-notdel{--accent:var(--red)} .tile-notdel .t-num{color:var(--red)} .tile-notdel .t-pct{background:var(--red-light);color:var(--red);}
+
+/* ── STATUS DISTRIBUTION ── */
+.dist-card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:20px;}
+.dist-hdr{padding:18px 24px;border-bottom:1px solid var(--border);font-size:14px;font-weight:700;}
+.dist-table{width:100%;border-collapse:collapse;}
+.dist-table th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:10px 20px;text-align:left;border-bottom:1px solid var(--border);}
+.dist-table td{padding:11px 20px;font-size:13px;border-bottom:1px solid #f8fafc;}
+.dist-table tr:last-child td{border-bottom:none;} .dist-table tr:hover td{background:var(--bg);}
+.dist-bar-bg{background:#f1f5f9;border-radius:4px;height:7px;} .dist-bar-fill{height:100%;border-radius:4px;}
+.dist-count{font-weight:700;font-size:14px;width:100px;text-align:right;}
+.dist-pct{font-size:12px;font-weight:600;color:var(--muted);width:50px;text-align:right;}
+.status-badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px;}
+</style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loadOverlay">
+  <div class="load-spinner"></div>
+  <div class="load-text">Loading live data…</div>
+</div>
+
+<!-- Error banner -->
+<div id="errBanner"></div>
+
+<div class="hdr">
+  <div>
+    <h1>SKU Journey Tracker</h1>
+    <p>Filter: is_360 = 0 / false &nbsp;·&nbsp; All statuses &nbsp;·&nbsp; Prod-ClickHouse &nbsp;·&nbsp; Card #12816</p>
+  </div>
+  <div class="hdr-right">
+    <span class="chip live">● Live</span>
+    <span class="chip dark">is_360 = 0</span>
+    <span class="updated-badge" id="updatedBadge">Fetching…</span>
+    <button id="refreshBtn" onclick="loadData(true)">↻ Refresh</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showPage('journey',this)">Journey View</div>
+  <div class="tab" onclick="showPage('status',this)">Status Distribution</div>
+</div>
+
+<!-- Sumbar — totals filled by JS -->
+<div class="sumbar">
+  <div class="sum-item"><div class="sl">Total SKUs</div><div class="sv" id="sum-total">—</div><div class="ss">is_360 = 0 · all statuses</div></div>
+  <div class="sum-item"><div class="sl">v1 · QC On</div><div class="sv" id="sum-v1q1">—</div><div class="ss">ai → done → qc</div></div>
+  <div class="sum-item"><div class="sl">v1 · QC Off</div><div class="sv" id="sum-v1q0">—</div><div class="ss">ai → done</div></div>
+  <div class="sum-item"><div class="sl">v2 · QC Off</div><div class="sv" id="sum-v2q0">—</div><div class="ss">processed → ai → done</div></div>
+  <div class="sum-item"><div class="sl">v2 · Publishing</div><div class="sv" id="sum-v2pub1">—</div><div class="ss">→ qc → pushed</div></div>
+  <div class="sum-item"><div class="sl">v2 · No Publish</div><div class="sv" id="sum-v2pub0">—</div><div class="ss">→ qc done</div></div>
+</div>
+
+<div class="main">
+
+<!-- ══ JOURNEY PAGE ══ -->
+<div class="page active" id="page-journey">
+
+  <!-- SEG 1: v1 QC On -->
+  <div class="seg">
+    <div class="seg-hdr">
+      <span class="seg-badge b-v1qc"><span class="dot"></span>v1 · QC On</span>
+      <span class="seg-title">v1 — QC enabled</span>
+      <span class="seg-flow">ai_sku_created_on → done_time → qc_done_time</span>
+      <span class="seg-total">Total: <strong id="seg-v1q1-total">—</strong></span>
+      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
+    </div>
+    <div class="states">
+      <div class="state-tile tile-delivered">
+        <div class="t-label">Delivered</div>
+        <div class="t-num" id="cnt-v1q1-delivered">—</div>
+        <div class="t-pct" id="pct-v1q1-delivered">—</div>
+      </div>
+      <div class="state-tile tile-qc">
+        <div class="t-label">QC Pending</div>
+        <div class="t-num" id="cnt-v1q1-qc-pending">—</div>
+        <div class="t-pct" id="pct-v1q1-qc-pending">—</div>
+      </div>
+      <div class="state-tile tile-tech">
+        <div class="t-label">Tech Processing Pending</div>
+        <div class="t-num" id="cnt-v1q1-tech-pending">—</div>
+        <div class="t-pct" id="pct-v1q1-tech-pending">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SEG 2: v1 QC Off -->
+  <div class="seg">
+    <div class="seg-hdr">
+      <span class="seg-badge b-v1no"><span class="dot"></span>v1 · QC Off</span>
+      <span class="seg-title">v1 — QC disabled</span>
+      <span class="seg-flow">ai_sku_created_on → done_time</span>
+      <span class="seg-total">Total: <strong id="seg-v1q0-total">—</strong></span>
+      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
+    </div>
+    <div class="states">
+      <div class="state-tile tile-delivered">
+        <div class="t-label">Delivered</div>
+        <div class="t-num" id="cnt-v1q0-delivered">—</div>
+        <div class="t-pct" id="pct-v1q0-delivered">—</div>
+      </div>
+      <div class="state-tile tile-tech">
+        <div class="t-label">Tech Processing Pending</div>
+        <div class="t-num" id="cnt-v1q0-tech-pending">—</div>
+        <div class="t-pct" id="pct-v1q0-tech-pending">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SEG 3: v2 QC Off -->
+  <div class="seg">
+    <div class="seg-hdr">
+      <span class="seg-badge b-v2no"><span class="dot"></span>v2 · QC Off</span>
+      <span class="seg-title">v2 — QC disabled</span>
+      <span class="seg-flow">processedAt → ai_sku_created_on → done_time</span>
+      <span class="seg-total">Total: <strong id="seg-v2q0-total">—</strong></span>
+      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
+    </div>
+    <div class="states">
+      <div class="state-tile tile-delivered">
+        <div class="t-label">Delivered</div>
+        <div class="t-num" id="cnt-v2q0-delivered">—</div>
+        <div class="t-pct" id="pct-v2q0-delivered">—</div>
+      </div>
+      <div class="state-tile tile-tech">
+        <div class="t-label">Tech Processing Pending</div>
+        <div class="t-num" id="cnt-v2q0-tech-pending">—</div>
+        <div class="t-pct" id="pct-v2q0-tech-pending">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SEG 4: v2 QC On + Publishing -->
+  <div class="seg">
+    <div class="seg-hdr">
+      <span class="seg-badge b-v2pub"><span class="dot"></span>v2 · QC On · Publishing</span>
+      <span class="seg-title">v2 — QC + Publishing enabled</span>
+      <span class="seg-flow">processedAt → ai_sku_created_on → done_time → qc_done_time → firstPushedAt</span>
+      <span class="seg-total">Total: <strong id="seg-v2pub1-total">—</strong></span>
+      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
+    </div>
+    <div class="states">
+      <div class="state-tile tile-delivered">
+        <div class="t-label">Delivered</div>
+        <div class="t-num" id="cnt-v2pub1-delivered">—</div>
+        <div class="t-pct" id="pct-v2pub1-delivered">—</div>
+      </div>
+      <div class="state-tile tile-pubpend">
+        <div class="t-label">Publishing Pending</div>
+        <div class="t-num" id="cnt-v2pub1-pub-pending">—</div>
+        <div class="t-pct" id="pct-v2pub1-pub-pending">—</div>
+      </div>
+      <div class="state-tile tile-tobepushed">
+        <div class="t-label">To Be Pushed</div>
+        <div class="t-num" id="cnt-v2pub1-to-push">—</div>
+        <div class="t-pct" id="pct-v2pub1-to-push">≤4h after QC</div>
+      </div>
+      <div class="state-tile tile-qc">
+        <div class="t-label">QC Pending</div>
+        <div class="t-num" id="cnt-v2pub1-qc-pending">—</div>
+        <div class="t-pct" id="pct-v2pub1-qc-pending">—</div>
+      </div>
+      <div class="state-tile tile-tech">
+        <div class="t-label">Tech Processing Pending</div>
+        <div class="t-num" id="cnt-v2pub1-tech-pending">—</div>
+        <div class="t-pct" id="pct-v2pub1-tech-pending">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SEG 5: v2 QC On, No Publishing -->
+  <div class="seg">
+    <div class="seg-hdr">
+      <span class="seg-badge b-v2nopub"><span class="dot"></span>v2 · QC On · No Publishing</span>
+      <span class="seg-title">v2 — QC enabled, Publishing disabled</span>
+      <span class="seg-flow">processedAt → ai_sku_created_on → done_time → qc_done_time</span>
+      <span class="seg-total">Total: <strong id="seg-v2pub0-total">—</strong></span>
+      <a class="seg-mb-link" href="https://metabase.spyne.ai/question/12816" target="_blank">View in Metabase ↗</a>
+    </div>
+    <div class="states">
+      <div class="state-tile tile-delivered">
+        <div class="t-label">Delivered</div>
+        <div class="t-num" id="cnt-v2pub0-delivered">—</div>
+        <div class="t-pct" id="pct-v2pub0-delivered">—</div>
+      </div>
+      <div class="state-tile tile-notdel">
+        <div class="t-label">Not Delivered</div>
+        <div class="t-num" id="cnt-v2pub0-not-delivered">—</div>
+        <div class="t-pct" id="pct-v2pub0-not-delivered">—</div>
+      </div>
+      <div class="state-tile tile-tech">
+        <div class="t-label">Tech Processing Pending</div>
+        <div class="t-num" id="cnt-v2pub0-tech-pending">—</div>
+        <div class="t-pct" id="pct-v2pub0-tech-pending">—</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /journey -->
+
+<!-- ══ STATUS DISTRIBUTION PAGE ══ -->
+<div class="page" id="page-status">
+  <div class="dist-card">
+    <div class="dist-hdr">SKU Status Distribution — is_360 = 0</div>
+    <table class="dist-table">
+      <thead><tr><th>Status</th><th class="dist-count">Count</th><th style="width:260px">Share</th><th class="dist-pct">%</th></tr></thead>
+      <tbody>
+        <tr><td><span class="status-badge" style="background:#f0fdf4;color:#16a34a">Done</span></td><td class="dist-count">1,109,282</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:100%;background:#16a34a"></div></div></td><td class="dist-pct">99.9%</td></tr>
+        <tr><td><span class="status-badge" style="background:#fffbeb;color:#d97706">Yet to Start</span></td><td class="dist-count">811</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.07%;background:#d97706"></div></div></td><td class="dist-pct">0.07%</td></tr>
+        <tr><td><span class="status-badge" style="background:#eff6ff;color:#2563eb">In Progress</span></td><td class="dist-count">295</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.03%;background:#2563eb"></div></div></td><td class="dist-pct">0.03%</td></tr>
+        <tr><td><span class="status-badge" style="background:#f5f5f5;color:#6b7280">Draft</span></td><td class="dist-count">118</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.01%;background:#6b7280"></div></div></td><td class="dist-pct">0.01%</td></tr>
+        <tr><td><span class="status-badge" style="background:#fef2f2;color:#dc2626">InsufficientAssets</span></td><td class="dist-count">56</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.005%;background:#dc2626"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
+        <tr><td><span class="status-badge" style="background:#f5f3ff;color:#7c3aed">yet_to_upload</span></td><td class="dist-count">10</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.001%;background:#7c3aed"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="dist-card">
+    <div class="dist-hdr">CRM Status Distribution — is_360 = 0</div>
+    <table class="dist-table">
+      <thead><tr><th>CRM Status</th><th class="dist-count">Count</th><th style="width:260px">Share</th><th class="dist-pct">%</th></tr></thead>
+      <tbody>
+        <tr><td><span class="status-badge" style="background:#f0fdf4;color:#16a34a">qc_done</span></td><td class="dist-count">1,085,042</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:100%;background:#16a34a"></div></div></td><td class="dist-pct">97.7%</td></tr>
+        <tr><td><span class="status-badge" style="background:#eff6ff;color:#2563eb">qc_unassigned</span></td><td class="dist-count">23,742</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:2.19%;background:#2563eb"></div></div></td><td class="dist-pct">2.14%</td></tr>
+        <tr><td><span class="status-badge" style="background:#fff7ed;color:#ea580c">qc_inprogress</span></td><td class="dist-count">173</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.02%;background:#ea580c"></div></div></td><td class="dist-pct">0.02%</td></tr>
+        <tr><td><span class="status-badge" style="background:#fef2f2;color:#dc2626">qc_onhold</span></td><td class="dist-count">142</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.013%;background:#dc2626"></div></div></td><td class="dist-pct">0.01%</td></tr>
+        <tr><td><span class="status-badge" style="background:#f5f5f5;color:#6b7280">(null)</span></td><td class="dist-count">100</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.009%;background:#6b7280"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
+        <tr><td><span class="status-badge" style="background:#f5f3ff;color:#7c3aed">enterprise_done</span></td><td class="dist-count">19</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.002%;background:#7c3aed"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
+        <tr><td><span class="status-badge" style="background:#f0fdf4;color:#059669">editing_unassigned</span></td><td class="dist-count">10</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.001%;background:#059669"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
+        <tr><td><span class="status-badge" style="background:#fffbeb;color:#d97706">editing_started</span></td><td class="dist-count">4</td><td><div class="dist-bar-bg"><div class="dist-bar-fill" style="width:0.0%;background:#d97706"></div></div></td><td class="dist-pct">&lt;0.01%</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</div><!-- /main -->
+
+<script>
+// ── TABS ──────────────────────────────────────────────────────────────────────
+function showPage(name, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  el.classList.add('active');
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+const n = v => (v ?? 0).toLocaleString();
+const pct = (part, total) => total > 0 ? ((part / total) * 100).toFixed(2) + '%' : '—';
+
+function set(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+// ── POPULATE FROM COUNTS ──────────────────────────────────────────────────────
+function populate(d) {
+  // Segment totals
+  const v1q1 = (d.v1_qc1_delivered||0) + (d.v1_qc1_qc_pending||0) + (d.v1_qc1_tech_pending||0);
+  const v1q0 = (d.v1_qc0_delivered||0) + (d.v1_qc0_tech_pending||0);
+  const v2q0 = (d.v2_qc0_delivered||0) + (d.v2_qc0_tech_pending||0);
+  const v2p1 = (d.v2_pub1_delivered||0) + (d.v2_pub1_pub_pending||0) + (d.v2_pub1_to_push||0)
+             + (d.v2_pub1_qc_pending||0) + (d.v2_pub1_tech_pending||0);
+  const v2p0 = (d.v2_pub0_delivered||0) + (d.v2_pub0_not_delivered||0) + (d.v2_pub0_tech_pending||0);
+  const grand = v1q1 + v1q0 + v2q0 + v2p1 + v2p0;
+
+  // Sumbar
+  set('sum-total',  n(grand));
+  set('sum-v1q1',   n(v1q1));
+  set('sum-v1q0',   n(v1q0));
+  set('sum-v2q0',   n(v2q0));
+  set('sum-v2pub1', n(v2p1));
+  set('sum-v2pub0', n(v2p0));
+
+  // Segment totals in headers
+  set('seg-v1q1-total',  n(v1q1));
+  set('seg-v1q0-total',  n(v1q0));
+  set('seg-v2q0-total',  n(v2q0));
+  set('seg-v2pub1-total',n(v2p1));
+  set('seg-v2pub0-total',n(v2p0));
+
+  // ── Seg 1: v1 QC On ──
+  set('cnt-v1q1-delivered',    n(d.v1_qc1_delivered));
+  set('cnt-v1q1-qc-pending',   n(d.v1_qc1_qc_pending));
+  set('cnt-v1q1-tech-pending', n(d.v1_qc1_tech_pending));
+  set('pct-v1q1-delivered',    pct(d.v1_qc1_delivered,   v1q1));
+  set('pct-v1q1-qc-pending',   pct(d.v1_qc1_qc_pending,  v1q1));
+  set('pct-v1q1-tech-pending', pct(d.v1_qc1_tech_pending, v1q1));
+
+  // ── Seg 2: v1 QC Off ──
+  set('cnt-v1q0-delivered',    n(d.v1_qc0_delivered));
+  set('cnt-v1q0-tech-pending', n(d.v1_qc0_tech_pending));
+  set('pct-v1q0-delivered',    pct(d.v1_qc0_delivered,    v1q0));
+  set('pct-v1q0-tech-pending', pct(d.v1_qc0_tech_pending, v1q0));
+
+  // ── Seg 3: v2 QC Off ──
+  set('cnt-v2q0-delivered',    n(d.v2_qc0_delivered));
+  set('cnt-v2q0-tech-pending', n(d.v2_qc0_tech_pending));
+  set('pct-v2q0-delivered',    pct(d.v2_qc0_delivered,    v2q0));
+  set('pct-v2q0-tech-pending', pct(d.v2_qc0_tech_pending, v2q0));
+
+  // ── Seg 4: v2 QC On · Publishing ──
+  set('cnt-v2pub1-delivered',    n(d.v2_pub1_delivered));
+  set('cnt-v2pub1-pub-pending',  n(d.v2_pub1_pub_pending));
+  set('cnt-v2pub1-to-push',      n(d.v2_pub1_to_push));
+  set('cnt-v2pub1-qc-pending',   n(d.v2_pub1_qc_pending));
+  set('cnt-v2pub1-tech-pending', n(d.v2_pub1_tech_pending));
+  set('pct-v2pub1-delivered',    pct(d.v2_pub1_delivered,    v2p1));
+  set('pct-v2pub1-pub-pending',  pct(d.v2_pub1_pub_pending,  v2p1) + ' · >4h wait');
+  set('pct-v2pub1-qc-pending',   pct(d.v2_pub1_qc_pending,   v2p1));
+  set('pct-v2pub1-tech-pending', pct(d.v2_pub1_tech_pending,  v2p1));
+
+  // ── Seg 5: v2 QC On · No Publishing ──
+  set('cnt-v2pub0-delivered',     n(d.v2_pub0_delivered));
+  set('cnt-v2pub0-not-delivered', n(d.v2_pub0_not_delivered));
+  set('cnt-v2pub0-tech-pending',  n(d.v2_pub0_tech_pending));
+  set('pct-v2pub0-delivered',     pct(d.v2_pub0_delivered,     v2p0));
+  set('pct-v2pub0-not-delivered', pct(d.v2_pub0_not_delivered,  v2p0));
+  set('pct-v2pub0-tech-pending',  pct(d.v2_pub0_tech_pending,   v2p0));
+}
+
+// ── "LAST UPDATED" BADGE ──────────────────────────────────────────────────────
+function fmtAge(isoStr) {
+  const diff = Math.floor((Date.now() - new Date(isoStr)) / 1000);
+  if (diff < 60)  return 'Updated just now';
+  if (diff < 3600) return `Updated ${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `Updated ${Math.floor(diff/3600)}h ago`;
+  return `Updated ${Math.floor(diff/86400)}d ago`;
+}
+
+// ── LOAD DATA ─────────────────────────────────────────────────────────────────
+let _lastUpdated = null;
+
+async function loadData(manual = false) {
+  const btn = document.getElementById('refreshBtn');
+  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+
+  try {
+    // Cache-bust on manual refresh so GitHub CDN returns fresh file
+    const url = manual
+      ? `./data/counts.json?t=${Date.now()}`
+      : `./data/counts.json`;
+
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const d = await resp.json();
+
+    populate(d);
+    _lastUpdated = d.updated_at;
+    set('updatedBadge', fmtAge(d.updated_at));
+
+    // Hide overlay / error
+    document.getElementById('loadOverlay').classList.add('done');
+    document.getElementById('errBanner').style.display = 'none';
+  } catch (err) {
+    document.getElementById('loadOverlay').classList.add('done');
+    const banner = document.getElementById('errBanner');
+    banner.style.display = 'block';
+    banner.textContent = `⚠ Could not load data/counts.json — ${err.message}. `
+      + (window.location.protocol === 'file:'
+          ? 'Open via a web server (e.g. GitHub Pages) or run: npx serve .'
+          : 'Check that data/counts.json exists in the repo.');
+  } finally {
+    if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+  }
+}
+
+// Refresh the "X minutes ago" badge every minute without re-fetching
+setInterval(() => {
+  if (_lastUpdated) set('updatedBadge', fmtAge(_lastUpdated));
+}, 60_000);
+
+// Initial load
+loadData();
+</script>
+</body>
+</html>
