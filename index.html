@@ -25,8 +25,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;
 .chip.live{background:#16a34a22;color:#4ade80;border:1px solid #16a34a44;}
 .chip.dark{background:rgba(255,255,255,.07);color:#c9d1e0;}
 .updated-badge{font-size:11px;color:#8892b0;white-space:nowrap;}
-#refreshBtn{padding:5px 12px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#c9d1e0;font-size:12px;cursor:pointer;transition:all .15s;}
+#refreshBtn{padding:5px 12px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#c9d1e0;font-size:12px;cursor:pointer;transition:all .15s;min-width:100px;text-align:center;}
 #refreshBtn:hover{background:rgba(255,255,255,.15);}
+#refreshBtn:disabled{opacity:.6;cursor:not-allowed;}
 
 /* ── LOADING OVERLAY ── */
 #loadOverlay{position:fixed;inset:0;background:rgba(13,17,23,.85);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .3s;}
@@ -429,10 +430,32 @@ const SEED = {
 
 // ── LOAD DATA ─────────────────────────────────────────────────────────────────
 let _lastUpdated = null;
+let _timerInterval = null;
+
+function startRefreshTimer(btn) {
+  const start = Date.now();
+  btn.disabled = true;
+  clearInterval(_timerInterval);
+  _timerInterval = setInterval(() => {
+    const s = ((Date.now() - start) / 1000).toFixed(1);
+    btn.textContent = `⏳ ${s}s`;
+  }, 100);
+}
+
+function stopRefreshTimer(btn) {
+  clearInterval(_timerInterval);
+  btn.textContent = '↻ Refresh';
+  btn.disabled = false;
+}
 
 async function loadData(manual = false) {
   const btn = document.getElementById('refreshBtn');
-  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+
+  if (manual) {
+    startRefreshTimer(btn);
+  } else {
+    if (btn) { btn.textContent = '⏳ 0.0s'; btn.disabled = true; }
+  }
 
   // Always show seed data immediately so dashboard is never blank
   populate(SEED);
@@ -446,22 +469,28 @@ async function loadData(manual = false) {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const d = await resp.json();
 
+    // Replace nulls with seed fallback so dashboard never goes blank
+    for (const key of Object.keys(SEED)) {
+      if (key === 'updated_at') continue;
+      if (d[key] === null || d[key] === undefined) d[key] = SEED[key];
+    }
+
     populate(d);
     _lastUpdated = d.updated_at;
     set('updatedBadge', fmtAge(d.updated_at));
     document.getElementById('errBanner').style.display = 'none';
   } catch (err) {
-    // JSON missing (Actions not run yet) — seed data is already shown, just warn softly
     const banner = document.getElementById('errBanner');
     banner.style.display = 'block';
     banner.style.background = '#fffbeb';
     banner.style.borderBottomColor = '#fde68a';
     banner.style.color = '#92400e';
     banner.textContent = `⚠ Showing cached data (${fmtAge(SEED.updated_at)}). `
-      + `Live counts unavailable: data/counts.json not found (${err.message}). `
-      + `GitHub Actions will create it on the next scheduled run.`;
+      + `Live counts unavailable: ${err.message}. `
+      + `GitHub Actions will refresh data on next scheduled run.`;
   } finally {
-    if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+    if (manual) stopRefreshTimer(btn);
+    else if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
   }
 }
 
