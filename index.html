@@ -4,7 +4,6 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>SKU Journey Tracker</title>
-  
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -417,6 +416,17 @@ function fmtAge(isoStr) {
   return `Updated ${Math.floor(diff/86400)}d ago`;
 }
 
+// ── SEED DATA (last-known counts — shown instantly, overwritten by live JSON) ──
+const SEED = {
+  updated_at: "2026-07-30T13:01:47Z",
+  v1_qc1_delivered: 540093, v1_qc1_qc_pending: 23849, v1_qc1_tech_pending: 395,
+  v1_qc0_delivered: 297013, v1_qc0_tech_pending: 239,
+  v2_qc0_delivered: 159725, v2_qc0_tech_pending: 333,
+  v2_pub1_delivered: 76223, v2_pub1_pub_pending: 991, v2_pub1_to_push: 91,
+  v2_pub1_qc_pending: 166,  v2_pub1_tech_pending: 7,
+  v2_pub0_delivered: 11445, v2_pub0_not_delivered: 47, v2_pub0_tech_pending: 4
+};
+
 // ── LOAD DATA ─────────────────────────────────────────────────────────────────
 let _lastUpdated = null;
 
@@ -424,12 +434,14 @@ async function loadData(manual = false) {
   const btn = document.getElementById('refreshBtn');
   if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
 
-  try {
-    // Cache-bust on manual refresh so GitHub CDN returns fresh file
-    const url = manual
-      ? `./data/counts.json?t=${Date.now()}`
-      : `./data/counts.json`;
+  // Always show seed data immediately so dashboard is never blank
+  populate(SEED);
+  _lastUpdated = SEED.updated_at;
+  set('updatedBadge', fmtAge(SEED.updated_at));
+  document.getElementById('loadOverlay').classList.add('done');
 
+  try {
+    const url = `./data/counts.json?t=${Date.now()}`;
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const d = await resp.json();
@@ -437,18 +449,17 @@ async function loadData(manual = false) {
     populate(d);
     _lastUpdated = d.updated_at;
     set('updatedBadge', fmtAge(d.updated_at));
-
-    // Hide overlay / error
-    document.getElementById('loadOverlay').classList.add('done');
     document.getElementById('errBanner').style.display = 'none';
   } catch (err) {
-    document.getElementById('loadOverlay').classList.add('done');
+    // JSON missing (Actions not run yet) — seed data is already shown, just warn softly
     const banner = document.getElementById('errBanner');
     banner.style.display = 'block';
-    banner.textContent = `⚠ Could not load data/counts.json — ${err.message}. `
-      + (window.location.protocol === 'file:'
-          ? 'Open via a web server (e.g. GitHub Pages) or run: npx serve .'
-          : 'Check that data/counts.json exists in the repo.');
+    banner.style.background = '#fffbeb';
+    banner.style.borderBottomColor = '#fde68a';
+    banner.style.color = '#92400e';
+    banner.textContent = `⚠ Showing cached data (${fmtAge(SEED.updated_at)}). `
+      + `Live counts unavailable: data/counts.json not found (${err.message}). `
+      + `GitHub Actions will create it on the next scheduled run.`;
   } finally {
     if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
   }
